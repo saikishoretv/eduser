@@ -397,16 +397,20 @@ export default function Toolbar() {
       <div className="w-px h-4 bg-neutral-700 mx-1" />
 
       <button
-        onClick={audioMode ? () => removeAudioLayer(selectedAudioLayerId!) : deleteSelected}
-        disabled={audioMode ? false : !hasSelection}
+        onClick={
+          selectedOverlayId ? () => removeOverlayLayer(selectedOverlayId) :
+          audioMode         ? () => removeAudioLayer(selectedAudioLayerId!) :
+          deleteSelected
+        }
+        disabled={!selectedOverlayId && !audioMode && !hasSelection}
         className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors
-          ${audioMode || hasSelection
+          ${selectedOverlayId || audioMode || hasSelection
             ? 'text-neutral-400 hover:bg-red-950 hover:text-red-400'
             : 'text-neutral-600 cursor-not-allowed'
           }`}
       >
         Delete
-        <span className={`text-[10px] ${audioMode || hasSelection ? 'text-neutral-500' : 'text-neutral-700'}`}>⌫</span>
+        <span className={`text-[10px] ${selectedOverlayId || audioMode || hasSelection ? 'text-neutral-500' : 'text-neutral-700'}`}>⌫</span>
       </button>
 
       {audioMode && (
