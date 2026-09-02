@@ -411,11 +411,13 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const fontSize = Math.round(outH * (ol.fontSize ?? 5) / 100)
       const fontWeight = ol.fontWeight === 'bold' ? 'bold' : 'normal'
       ctx.font = `${fontWeight} ${fontSize}px sans-serif`
-      ctx.textBaseline = 'top'
+      // x/y are the CENTER of the element (matching preview's translate(-50%,-50%))
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
 
       const text = ol.text ?? 'Text'
-      const x = Math.round(outW * ol.x / 100)
-      const y = Math.round(outH * ol.y / 100)
+      const cx = Math.round(outW * ol.x / 100)
+      const cy = Math.round(outH * ol.y / 100)
 
       if ((ol.bgOpacity ?? 0) > 0) {
         const hex = ol.bgColor ?? '#000000'
@@ -425,11 +427,11 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
         const metrics = ctx.measureText(text)
         const pad = Math.max(4, Math.round(fontSize * 0.15))
         ctx.fillStyle = `rgba(${r},${g},${b},${ol.bgOpacity ?? 0})`
-        ctx.fillRect(x - pad, y - pad, metrics.width + pad * 2, fontSize + pad * 2)
+        ctx.fillRect(cx - metrics.width / 2 - pad, cy - fontSize / 2 - pad, metrics.width + pad * 2, fontSize + pad * 2)
       }
 
       ctx.fillStyle = ol.color ?? '#ffffff'
-      ctx.fillText(text, x, y)
+      ctx.fillText(text, cx, cy)
 
       const pngBlob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/png'))
       const pngArr = new Uint8Array(await pngBlob.arrayBuffer())
@@ -525,12 +527,15 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const scaledW = Math.round(outW * ol.width / 100)
       const scaledLabel = `[ol_scaled_${i}]`
       const outLabel = `[ov${i}]`
+      // x/y are the CENTER of the image (matching preview's translate(-50%,-50%))
+      // FFmpeg overlay uses top-left, so subtract half the scaled dimensions
       filterParts.push(`[${imgIdx}:v]scale=${scaledW}:-1${scaledLabel}`)
-      const x = Math.round(outW * ol.x / 100)
-      const y = Math.round(outH * ol.y / 100)
+      const cx = Math.round(outW * ol.x / 100)
+      const cy = Math.round(outH * ol.y / 100)
       const t0 = ol.startAt.toFixed(3)
       const t1 = (ol.startAt + ol.duration).toFixed(3)
-      filterParts.push(`${currentV}${scaledLabel}overlay=x=${x}:y=${y}:enable='between(t,${t0},${t1})'${outLabel}`)
+      // Use FFmpeg expressions to offset by half the scaled image size
+      filterParts.push(`${currentV}${scaledLabel}overlay=x=${cx}-overlay_w/2:y=${cy}-overlay_h/2:enable='between(t,${t0},${t1})'${outLabel}`)
       currentV = outLabel
     })
 

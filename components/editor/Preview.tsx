@@ -477,6 +477,7 @@ export default function Preview() {
                 position: 'absolute',
                 left: `${ol.x}%`,
                 top: `${ol.y}%`,
+                transform: 'translate(-50%, -50%)',
                 opacity: ol.opacity,
                 outline: isSel ? '2px solid #3b82f6' : '2px solid transparent',
                 outlineOffset: 2,
