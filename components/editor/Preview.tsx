@@ -468,71 +468,73 @@ export default function Preview() {
                 </div>
               </div>
             )}
-            {/* Overlay layers */}
-            {overlayLayers.map(ol => {
-              const t = previewTime ?? playheadTime
-              if (t < ol.startAt || t >= ol.startAt + ol.duration) return null
-              const isSel = selectedOverlayId === ol.id
-              const commonStyle: React.CSSProperties = {
-                position: 'absolute',
-                left: `${ol.x}%`,
-                top: `${ol.y}%`,
-                transform: 'translate(-50%, -50%)',
-                opacity: ol.opacity,
-                outline: isSel ? '2px solid #3b82f6' : '2px solid transparent',
-                outlineOffset: 2,
-                cursor: isSel ? 'move' : 'pointer',
-                userSelect: 'none',
-              }
-              if (ol.type === 'image' && ol.objectUrl) {
-                return (
-                  <img
-                    key={ol.id}
-                    src={ol.objectUrl}
-                    style={{ ...commonStyle, width: `${ol.width}%` }}
-                    draggable={false}
-                    onClick={e => { e.stopPropagation(); setSelectedOverlayId(isSel ? null : ol.id) }}
-                    onMouseDown={e => {
-                      if (!isSel) return
-                      e.stopPropagation()
-                      const container = containerRef.current
-                      if (!container) return
-                      overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
-                    }}
-                  />
-                )
-              }
-              if (ol.type === 'text') {
-                const container = containerRef.current
-                const h = container?.clientHeight ?? 400
-                return (
-                  <div
-                    key={ol.id}
-                    style={{
-                      ...commonStyle,
-                      fontSize: `${h * (ol.fontSize ?? 5) / 100}px`,
-                      fontWeight: ol.fontWeight ?? 'normal',
-                      color: ol.color ?? '#ffffff',
-                      backgroundColor: (ol.bgOpacity ?? 0) > 0
-                        ? `${ol.bgColor ?? '#000000'}${Math.round((ol.bgOpacity ?? 0) * 255).toString(16).padStart(2, '0')}`
-                        : 'transparent',
-                      padding: (ol.bgOpacity ?? 0) > 0 ? '2px 6px' : undefined,
-                      borderRadius: (ol.bgOpacity ?? 0) > 0 ? 4 : undefined,
-                      whiteSpace: 'pre',
-                    }}
-                    onClick={e => { e.stopPropagation(); setSelectedOverlayId(isSel ? null : ol.id) }}
-                    onMouseDown={e => {
-                      if (!isSel) return
-                      e.stopPropagation()
-                      overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
-                    }}
-                  >
-                    {ol.text || 'Text'}
-                  </div>
-                )
-              }
-              return null
-            })}
+            {/* Overlay layers — absolute inset-0 wrapper gives a reliable full-size
+                positioning context regardless of the parent's flex layout */}
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
+              {overlayLayers.map(ol => {
+                const t = previewTime ?? playheadTime
+                if (t < ol.startAt || t >= ol.startAt + ol.duration) return null
+                const isSel = selectedOverlayId === ol.id
+                const commonStyle: React.CSSProperties = {
+                  position: 'absolute',
+                  left: `${ol.x}%`,
+                  top: `${ol.y}%`,
+                  transform: 'translate(-50%, -50%)',
+                  opacity: ol.opacity,
+                  outline: isSel ? '2px solid #3b82f6' : '2px solid transparent',
+                  outlineOffset: 2,
+                  cursor: isSel ? 'move' : 'pointer',
+                  userSelect: 'none',
+                  pointerEvents: 'auto',
+                }
+                if (ol.type === 'image' && ol.objectUrl) {
+                  return (
+                    <img
+                      key={ol.id}
+                      src={ol.objectUrl}
+                      style={{ ...commonStyle, width: `${ol.width}%` }}
+                      draggable={false}
+                      onClick={e => { e.stopPropagation(); setSelectedOverlayId(isSel ? null : ol.id) }}
+                      onMouseDown={e => {
+                        if (!isSel) return
+                        e.stopPropagation()
+                        overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
+                      }}
+                    />
+                  )
+                }
+                if (ol.type === 'text') {
+                  const container = containerRef.current
+                  const h = container?.clientHeight ?? 400
+                  return (
+                    <div
+                      key={ol.id}
+                      style={{
+                        ...commonStyle,
+                        fontSize: `${h * (ol.fontSize ?? 5) / 100}px`,
+                        fontWeight: ol.fontWeight ?? 'normal',
+                        color: ol.color ?? '#ffffff',
+                        backgroundColor: (ol.bgOpacity ?? 0) > 0
+                          ? `${ol.bgColor ?? '#000000'}${Math.round((ol.bgOpacity ?? 0) * 255).toString(16).padStart(2, '0')}`
+                          : 'transparent',
+                        padding: (ol.bgOpacity ?? 0) > 0 ? '2px 6px' : undefined,
+                        borderRadius: (ol.bgOpacity ?? 0) > 0 ? 4 : undefined,
+                        whiteSpace: 'pre',
+                      }}
+                      onClick={e => { e.stopPropagation(); setSelectedOverlayId(isSel ? null : ol.id) }}
+                      onMouseDown={e => {
+                        if (!isSel) return
+                        e.stopPropagation()
+                        overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
+                      }}
+                    >
+                      {ol.text || 'Text'}
+                    </div>
+                  )
+                }
+                return null
+              })}
+            </div>
 
             {/* Format label + drag hint */}
             {outputFormat && (
