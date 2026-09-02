@@ -58,6 +58,11 @@ export default function Toolbar() {
   const setSelectedOverlayId     = useEditorStore(s => s.setSelectedOverlayId)
   const updateOverlayLayer       = useEditorStore(s => s.updateOverlayLayer)
   const removeOverlayLayer       = useEditorStore(s => s.removeOverlayLayer)
+  const cutOverlayLayer          = useEditorStore(s => s.cutOverlayLayer)
+  const copyOverlayLayer         = useEditorStore(s => s.copyOverlayLayer)
+  const pasteOverlayLayer        = useEditorStore(s => s.pasteOverlayLayer)
+  const duplicateOverlayLayer    = useEditorStore(s => s.duplicateOverlayLayer)
+  const overlayClipboard         = useEditorStore(s => s.overlayClipboard)
 
   const project       = projects.find(p => p.id === activeProjectId) ?? null
   const hasSelection  = selectedClipIds.length > 0
@@ -326,12 +331,35 @@ export default function Toolbar() {
           </>
         )}
 
-        <button
-          onClick={() => removeOverlayLayer(ol.id)}
-          className="ml-auto px-2.5 py-1 rounded text-xs text-red-400 hover:bg-red-950 transition-colors shrink-0"
-        >
-          Delete
-        </button>
+        <div className="ml-auto flex items-center gap-1 shrink-0">
+          {([
+            { label: 'Cut',       hint: '⌘X', fn: cutOverlayLayer,       enabled: true              },
+            { label: 'Copy',      hint: '⌘C', fn: copyOverlayLayer,      enabled: true              },
+            { label: 'Paste',     hint: '⌘V', fn: pasteOverlayLayer,     enabled: !!overlayClipboard },
+            { label: 'Duplicate', hint: '⌘D', fn: duplicateOverlayLayer, enabled: true              },
+          ]).map(({ label, hint, fn, enabled }) => (
+            <button
+              key={label}
+              onClick={fn}
+              disabled={!enabled}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                enabled
+                  ? 'text-neutral-300 hover:bg-neutral-700 hover:text-white'
+                  : 'text-neutral-600 cursor-not-allowed'
+              }`}
+            >
+              {label}
+              <span className={`text-[10px] ${enabled ? 'text-neutral-500' : 'text-neutral-700'}`}>{hint}</span>
+            </button>
+          ))}
+          <div className="w-px h-4 bg-neutral-700 mx-0.5" />
+          <button
+            onClick={() => removeOverlayLayer(ol.id)}
+            className="px-2.5 py-1 rounded text-xs text-red-400 hover:bg-red-950 transition-colors"
+          >
+            Delete <span className="text-[10px] text-red-600">⌫</span>
+          </button>
+        </div>
       </div>
     )
   }

@@ -65,6 +65,12 @@ interface EditorStore {
   setZoom: (zoom: number) => void
 
   audioLayerClipboard: AudioLayer | null
+  overlayClipboard: OverlayLayer | null
+
+  cutOverlayLayer: () => void
+  copyOverlayLayer: () => void
+  pasteOverlayLayer: () => void
+  duplicateOverlayLayer: () => void
 
   detachAudio: (clipId: string) => void
   splitAudioLayer: () => void
@@ -102,6 +108,7 @@ export const useEditorStore = create<EditorStore>()(
       selectedAudioLayerId: null,
       selectedOverlayId: null,
       audioLayerClipboard: null,
+      overlayClipboard: null,
       clipboard: [],
       playheadTime: 0,
       previewTime: null,
@@ -319,6 +326,69 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedAudioLayerId: newLayer.id,
+          }
+        })
+      },
+
+      cutOverlayLayer: () => {
+        set(s => {
+          const project = activeProject(s)
+          if (!project || !s.selectedOverlayId) return s
+          const layer = (project.overlayLayers ?? []).find(ol => ol.id === s.selectedOverlayId)
+          if (!layer) return s
+          return {
+            overlayClipboard: layer,
+            projects: s.projects.map(p =>
+              p.id === project.id
+                ? { ...p, overlayLayers: (p.overlayLayers ?? []).filter(ol => ol.id !== layer.id) }
+                : p
+            ),
+            selectedOverlayId: null,
+          }
+        })
+      },
+
+      copyOverlayLayer: () => {
+        set(s => {
+          const project = activeProject(s)
+          if (!project || !s.selectedOverlayId) return s
+          const layer = (project.overlayLayers ?? []).find(ol => ol.id === s.selectedOverlayId)
+          if (!layer) return s
+          return { overlayClipboard: layer }
+        })
+      },
+
+      pasteOverlayLayer: () => {
+        set(s => {
+          if (!s.overlayClipboard) return s
+          const project = activeProject(s)
+          if (!project) return s
+          const newLayer: OverlayLayer = { ...s.overlayClipboard, id: uid(), startAt: s.playheadTime }
+          return {
+            projects: s.projects.map(p =>
+              p.id === project.id
+                ? { ...p, overlayLayers: [...(p.overlayLayers ?? []), newLayer] }
+                : p
+            ),
+            selectedOverlayId: newLayer.id,
+          }
+        })
+      },
+
+      duplicateOverlayLayer: () => {
+        set(s => {
+          const project = activeProject(s)
+          if (!project || !s.selectedOverlayId) return s
+          const layer = (project.overlayLayers ?? []).find(ol => ol.id === s.selectedOverlayId)
+          if (!layer) return s
+          const newLayer: OverlayLayer = { ...layer, id: uid(), startAt: layer.startAt + layer.duration }
+          return {
+            projects: s.projects.map(p =>
+              p.id === project.id
+                ? { ...p, overlayLayers: [...(p.overlayLayers ?? []), newLayer] }
+                : p
+            ),
+            selectedOverlayId: newLayer.id,
           }
         })
       },

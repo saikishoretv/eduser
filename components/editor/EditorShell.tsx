@@ -41,29 +41,34 @@ export default function EditorShell({ projectId }: Props) {
       if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
 
       const s = useEditorStore.getState()
-      const audioMode = !!s.selectedAudioLayerId
+      const audioMode   = !!s.selectedAudioLayerId
+      const overlayMode = !!s.selectedOverlayId
 
       if (e.key === ' ') {
         e.preventDefault()
         s.setPlaying(!s.isPlaying)
       } else if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
-        audioMode ? s.splitAudioLayer() : s.split()
+        if (!overlayMode) audioMode ? s.splitAudioLayer() : s.split()
       } else if (e.key === 'm' && !e.metaKey && !e.ctrlKey) {
-        if (!audioMode) s.merge()
+        if (!audioMode && !overlayMode) s.merge()
       } else if (e.key === 'x' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        audioMode ? s.cutAudioLayer() : s.cut()
+        overlayMode ? s.cutOverlayLayer() : audioMode ? s.cutAudioLayer() : s.cut()
       } else if (e.key === 'c' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        audioMode ? s.copyAudioLayer() : s.copy()
+        overlayMode ? s.copyOverlayLayer() : audioMode ? s.copyAudioLayer() : s.copy()
       } else if (e.key === 'v' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        audioMode ? s.pasteAudioLayer() : s.paste()
+        overlayMode || s.overlayClipboard
+          ? s.pasteOverlayLayer()
+          : audioMode ? s.pasteAudioLayer() : s.paste()
       } else if (e.key === 'd' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
-        audioMode ? s.duplicateAudioLayer() : s.duplicate()
+        overlayMode ? s.duplicateOverlayLayer() : audioMode ? s.duplicateAudioLayer() : s.duplicate()
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        audioMode ? s.removeAudioLayer(s.selectedAudioLayerId!) : s.deleteSelected()
+        if (overlayMode) s.removeOverlayLayer(s.selectedOverlayId!)
+        else if (audioMode) s.removeAudioLayer(s.selectedAudioLayerId!)
+        else s.deleteSelected()
       }
     }
 
