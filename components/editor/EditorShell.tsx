@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
-import { extractAudioAsWav } from '@/lib/audioUtils'
+import { extractAudioChunks } from '@/lib/audioUtils'
 import Preview from './Preview'
 import Toolbar from './Toolbar'
 import Timeline from './Timeline'
@@ -79,16 +79,35 @@ export default function EditorShell({ projectId }: Props) {
     setTranscribeError(null)
     try {
       for (const source of project.sources) {
-        const audioBlob = await extractAudioAsWav(source.objectUrl)
-        const form = new FormData()
-        form.append('audio', audioBlob, 'audio.wav')
-        const res = await fetch('/api/transcribe', { method: 'POST', body: form })
-        if (!res.ok) {
-          const { error } = await res.json()
-          throw new Error(error ?? 'Transcription failed')
+        const chunks = await extractAudioChunks(source.objectUrl)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const allSegments: any[] = []
+
+        for (const chunk of chunks) {
+          const form = new FormData()
+          form.append('audio', chunk.blob, 'audio.wav')
+          const res = await fetch('/api/transcribe', { method: 'POST', body: form })
+          if (!res.ok) {
+            const { error } = await res.json()
+            throw new Error(error ?? 'Transcription failed')
+          }
+          const { segments } = await res.json()
+          // Shift all timestamps by the chunk's start offset
+          for (const seg of segments) {
+            allSegments.push({
+              ...seg,
+              start: seg.start + chunk.offset,
+              end:   seg.end   + chunk.offset,
+              words: (seg.words ?? []).map((w: { word: string; start: number; end: number }) => ({
+                ...w,
+                start: w.start + chunk.offset,
+                end:   w.end   + chunk.offset,
+              })),
+            })
+          }
         }
-        const { segments } = await res.json()
-        setSourceTranscript(source.id, segments)
+
+        setSourceTranscript(source.id, allSegments)
       }
     } catch (err) {
       setTranscribeError(err instanceof Error ? err.message : 'Unknown error')

@@ -1,28 +1,48 @@
+const TARGET_RATE = 16_000
+// 110 s × 16 000 Hz × 2 bytes ≈ 3.4 MB — safely under Vercel's 4.5 MB payload limit
+const CHUNK_SECS = 110
+
 /**
- * Fetches a video/audio objectUrl, decodes it, resamples to 16 kHz mono,
- * and returns it as a WAV Blob suitable for the Whisper API.
+ * Splits a video/audio objectUrl into ≤110-second WAV chunks resampled to
+ * 16 kHz mono. Each chunk is labelled with its start offset (seconds) so
+ * that transcript timestamps can be adjusted after transcription.
  */
-export async function extractAudioAsWav(objectUrl: string): Promise<Blob> {
+export async function extractAudioChunks(
+  objectUrl: string,
+): Promise<Array<{ blob: Blob; offset: number }>> {
   const response = await fetch(objectUrl)
   const arrayBuffer = await response.arrayBuffer()
 
-  // Decode at the native sample rate
   const tempCtx = new AudioContext()
   const audioBuffer = await tempCtx.decodeAudioData(arrayBuffer)
   await tempCtx.close()
 
-  // Resample to 16 kHz mono (Whisper's optimal input format)
-  const targetRate = 16_000
-  const numSamples = Math.ceil(audioBuffer.duration * targetRate)
-  const offlineCtx = new OfflineAudioContext(1, numSamples, targetRate)
-  const src = offlineCtx.createBufferSource()
-  src.buffer = audioBuffer
-  src.connect(offlineCtx.destination)
-  src.start()
-  const resampled = await offlineCtx.startRendering()
-  const samples = resampled.getChannelData(0)
+  const duration = audioBuffer.duration
+  const chunks: Array<{ blob: Blob; offset: number }> = []
 
-  return new Blob([encodeWav(samples, targetRate)], { type: 'audio/wav' })
+  for (let start = 0; start < duration; start += CHUNK_SECS) {
+    const chunkDuration = Math.min(CHUNK_SECS, duration - start)
+    const numSamples = Math.ceil(chunkDuration * TARGET_RATE)
+    const offlineCtx = new OfflineAudioContext(1, numSamples, TARGET_RATE)
+    const src = offlineCtx.createBufferSource()
+    src.buffer = audioBuffer
+    src.connect(offlineCtx.destination)
+    src.start(0, start) // play from `start` seconds into the source buffer
+    const rendered = await offlineCtx.startRendering()
+    const samples = rendered.getChannelData(0)
+    chunks.push({
+      blob: new Blob([encodeWav(samples, TARGET_RATE)], { type: 'audio/wav' }),
+      offset: start,
+    })
+  }
+
+  return chunks
+}
+
+/** @deprecated Use extractAudioChunks instead */
+export async function extractAudioAsWav(objectUrl: string): Promise<Blob> {
+  const chunks = await extractAudioChunks(objectUrl)
+  return chunks[0].blob
 }
 
 function encodeWav(samples: Float32Array, sampleRate: number): ArrayBuffer {
