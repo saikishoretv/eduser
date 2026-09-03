@@ -47,6 +47,7 @@ export default function Timeline() {
   const setPreviewTime = useEditorStore(s => s.setPreviewTime)
   const clearSelection = useEditorStore(s => s.clearSelection)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
+  const setSelectedOverlayId    = useEditorStore(s => s.setSelectedOverlayId)
   const addAudioLayer   = useEditorStore(s => s.addAudioLayer)
   const addOverlayLayer = useEditorStore(s => s.addOverlayLayer)
   const setZoom         = useEditorStore(s => s.setZoom)
@@ -337,6 +338,7 @@ export default function Timeline() {
               key={layer.id}
               className="absolute left-0 right-0 mx-2 rounded"
               style={{ top: getLayerTop(i), height: AUDIO_ROW_H, background: 'rgba(255,255,255,0.02)' }}
+              onClick={e => { e.stopPropagation(); setSelectedAudioLayerId(layer.id) }}
             >
               <AudioLayerItem
                 layer={layer}
@@ -373,6 +375,7 @@ export default function Timeline() {
               <div
                 className="absolute left-0 right-0 mx-2 rounded"
                 style={{ top: getOverlayTop(i), height: OVERLAY_ROW_H, background: 'rgba(255,255,255,0.02)' }}
+                onClick={e => { e.stopPropagation(); setSelectedOverlayId(ol.id) }}
               >
                 <OverlayItem overlay={ol} zoom={zoom} selected={selectedOverlayId === ol.id} />
               </div>

@@ -11,8 +11,8 @@ interface Props {
 }
 
 export default function OverlayItem({ overlay, zoom, selected }: Props) {
-  const updateOverlayLayer  = useEditorStore(s => s.updateOverlayLayer)
-  const removeOverlayLayer  = useEditorStore(s => s.removeOverlayLayer)
+  const updateOverlayLayer   = useEditorStore(s => s.updateOverlayLayer)
+  const removeOverlayLayer   = useEditorStore(s => s.removeOverlayLayer)
   const setSelectedOverlayId = useEditorStore(s => s.setSelectedOverlayId)
 
   const bodyDragRef  = useRef<{ startX: number; startAt: number } | null>(null)
@@ -24,7 +24,6 @@ export default function OverlayItem({ overlay, zoom, selected }: Props) {
 
   function handleBodyMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
-    setSelectedOverlayId(overlay.id)
     bodyDragRef.current = { startX: e.clientX, startAt: overlay.startAt }
     const move = (ev: MouseEvent) => {
       if (!bodyDragRef.current) return
@@ -57,11 +56,6 @@ export default function OverlayItem({ overlay, zoom, selected }: Props) {
     window.addEventListener('mouseup', up)
   }
 
-  function handleClick(e: React.MouseEvent) {
-    e.stopPropagation()
-    setSelectedOverlayId(selected ? null : overlay.id)
-  }
-
   return (
     <div
       className={`absolute top-0 bottom-0 flex items-center rounded cursor-grab select-none overflow-hidden
@@ -71,7 +65,7 @@ export default function OverlayItem({ overlay, zoom, selected }: Props) {
         }`}
       style={{ left, width }}
       onMouseDown={handleBodyMouseDown}
-      onClick={handleClick}
+      onClick={e => { e.stopPropagation(); setSelectedOverlayId(overlay.id) }}
     >
       {/* stripe pattern */}
       <div

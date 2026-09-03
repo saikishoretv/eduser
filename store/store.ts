@@ -51,6 +51,7 @@ interface EditorStore {
   removeAudioLayer: (layerId: string) => void
   updateAudioLayer: (layerId: string, patch: Partial<Pick<AudioLayer, 'volume' | 'startAt' | 'trimStart' | 'trimEnd'>>) => void
   setSelectedAudioLayerId: (id: string | null) => void
+  updateClip: (clipId: string, patch: Partial<Pick<Clip, 'trimStart' | 'trimEnd'>>) => void
   addOverlayLayer: (layer: OverlayLayer) => void
   removeOverlayLayer: (id: string) => void
   updateOverlayLayer: (id: string, patch: Partial<OverlayLayer>) => void
@@ -186,6 +187,16 @@ export const useEditorStore = create<EditorStore>()(
             : p
         ),
       })),
+
+      updateClip: (clipId, patch) => set(s => {
+        const project = activeProject(s)
+        if (!project) return s
+        return {
+          projects: replaceClips(s.projects, project.id,
+            project.clips.map(c => c.id === clipId ? { ...c, ...patch } : c)
+          ),
+        }
+      }),
 
       setSelectedAudioLayerId: (id) => set({ selectedAudioLayerId: id }),
       addOverlayLayer: (layer) => set(s => ({

@@ -494,7 +494,7 @@ export default function Preview() {
                       src={ol.objectUrl}
                       style={{ ...commonStyle, width: `${ol.width}%` }}
                       draggable={false}
-                      onClick={e => { e.stopPropagation(); setSelectedOverlayId(isSel ? null : ol.id) }}
+                      onClick={e => { e.stopPropagation(); setSelectedOverlayId(ol.id) }}
                       onMouseDown={e => {
                         if (!isSel) return
                         e.stopPropagation()
@@ -521,7 +521,7 @@ export default function Preview() {
                         borderRadius: (ol.bgOpacity ?? 0) > 0 ? 4 : undefined,
                         whiteSpace: 'pre',
                       }}
-                      onClick={e => { e.stopPropagation(); setSelectedOverlayId(isSel ? null : ol.id) }}
+                      onClick={e => { e.stopPropagation(); setSelectedOverlayId(ol.id) }}
                       onMouseDown={e => {
                         if (!isSel) return
                         e.stopPropagation()

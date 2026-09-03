@@ -238,6 +238,12 @@ export default function Toolbar() {
         >
           ← Back
         </button>
+        <button
+          onClick={() => removeOverlayLayer(ol.id)}
+          className="px-2.5 py-1 rounded text-xs text-red-400 hover:bg-red-950 transition-colors shrink-0"
+        >
+          Delete <span className="text-[10px] text-red-600">⌫</span>
+        </button>
         <div className="w-px h-4 bg-neutral-700 shrink-0" />
 
         {/* Shared: start + duration */}

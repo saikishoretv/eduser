@@ -11,11 +11,12 @@ interface Props {
 }
 
 export default function AudioLayerItem({ layer, zoom, selected }: Props) {
-  const updateAudioLayer      = useEditorStore(s => s.updateAudioLayer)
-  const removeAudioLayer      = useEditorStore(s => s.removeAudioLayer)
+  const updateAudioLayer        = useEditorStore(s => s.updateAudioLayer)
+  const removeAudioLayer        = useEditorStore(s => s.removeAudioLayer)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
-
-  const dragRef = useRef<{ startX: number; startAt: number } | null>(null)
+  const dragRef      = useRef<{ startX: number; startAt: number } | null>(null)
+  const leftTrimRef  = useRef<{ startX: number; trimStart: number; startAt: number } | null>(null)
+  const rightTrimRef = useRef<{ startX: number; trimEnd: number } | null>(null)
 
   const layerDuration = layer.trimEnd - layer.trimStart
   const left  = layer.startAt * zoom
@@ -40,9 +41,42 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
     window.addEventListener('mouseup', handleUp)
   }
 
-  function handleClick(e: React.MouseEvent) {
+  function handleLeftTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
-    setSelectedAudioLayerId(selected ? null : layer.id)
+    leftTrimRef.current = { startX: e.clientX, trimStart: layer.trimStart, startAt: layer.startAt }
+    const move = (ev: MouseEvent) => {
+      if (!leftTrimRef.current) return
+      const delta = (ev.clientX - leftTrimRef.current.startX) / zoom
+      const newTrimStart = Math.max(0, Math.min(leftTrimRef.current.trimStart + delta, layer.trimEnd - 0.1))
+      const actualDelta = newTrimStart - leftTrimRef.current.trimStart
+      const newStartAt  = Math.max(0, leftTrimRef.current.startAt + actualDelta)
+      updateAudioLayer(layer.id, { trimStart: newTrimStart, startAt: newStartAt })
+    }
+    const up = () => {
+      leftTrimRef.current = null
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
+  }
+
+  function handleRightTrimMouseDown(e: React.MouseEvent) {
+    e.stopPropagation()
+    rightTrimRef.current = { startX: e.clientX, trimEnd: layer.trimEnd }
+    const move = (ev: MouseEvent) => {
+      if (!rightTrimRef.current) return
+      const delta = (ev.clientX - rightTrimRef.current.startX) / zoom
+      const newTrimEnd = Math.max(layer.trimStart + 0.1, Math.min(rightTrimRef.current.trimEnd + delta, layer.duration))
+      updateAudioLayer(layer.id, { trimEnd: newTrimEnd })
+    }
+    const up = () => {
+      rightTrimRef.current = null
+      window.removeEventListener('mousemove', move)
+      window.removeEventListener('mouseup', up)
+    }
+    window.addEventListener('mousemove', move)
+    window.addEventListener('mouseup', up)
   }
 
   const volume = layer.volume ?? 1
@@ -54,10 +88,10 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
       className="absolute flex items-center"
       style={{ left, width, top: 0, bottom: 0 }}
       onMouseDown={handleMouseDown}
-      onClick={handleClick}
+      onClick={e => { e.stopPropagation(); setSelectedAudioLayerId(layer.id) }}
     >
     <div
-      className={`w-full flex items-center rounded cursor-grab select-none overflow-hidden
+      className={`w-full relative flex items-center rounded cursor-grab select-none overflow-hidden
         bg-emerald-950 border transition-all duration-150
         ${selected ? 'border-emerald-400' : 'border-emerald-800 hover:border-emerald-600'}`}
       style={{ height: `${heightPct}%` }}
@@ -67,6 +101,18 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
         style={{ backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(52,211,153,0.4) 6px, rgba(52,211,153,0.4) 7px)' }}
       />
 
+      {/* Left trim handle */}
+      <div
+        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 bg-black/30 hover:bg-black/50"
+        onMouseDown={handleLeftTrimMouseDown}
+        onClick={e => e.stopPropagation()}
+      />
+      {/* Right trim handle */}
+      <div
+        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 bg-black/30 hover:bg-black/50"
+        onMouseDown={handleRightTrimMouseDown}
+        onClick={e => e.stopPropagation()}
+      />
       <div className="relative flex items-center gap-1.5 px-2 w-full overflow-hidden">
         {/* Music icon */}
         <svg className="w-3 h-3 text-emerald-400 shrink-0" fill="currentColor" viewBox="0 0 24 24">
