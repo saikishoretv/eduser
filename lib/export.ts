@@ -2,7 +2,7 @@ import { FFmpeg } from '@ffmpeg/ffmpeg'
 import { fetchFile, toBlobURL } from '@ffmpeg/util'
 import { Clip, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
 import { FormatPreset } from '@/lib/formats'
-import { SubtitleStyle } from '@/store/store'
+import { SubtitleStyle, TransitionType } from '@/store/store'
 import { SubtitleAppearance, StandardSubtitleAppearance } from '@/lib/subtitleTemplates'
 import { getClipTimings } from '@/lib/clipUtils'
 import { ColorCorrection, COLOR_CORRECTION_DEFAULT, toFfmpegColorFilter } from '@/lib/colorPresets'
@@ -17,6 +17,9 @@ export interface ExportOptions {
   audioLayers: AudioLayer[]
   overlayLayers: OverlayLayer[]
   clipColorCorrections: Record<string, ColorCorrection>
+  clipTransitionIn: Record<string, TransitionType>
+  clipTransitionOut: Record<string, TransitionType>
+  clipTransitionDurations: Record<string, number>
   subtitleStyle: SubtitleStyle
   subtitleAppearance: SubtitleAppearance
   standardSubtitleAppearance: StandardSubtitleAppearance
@@ -302,12 +305,82 @@ async function renderSubEvent(
   return new Uint8Array(await blob.arrayBuffer())
 }
 
+// ─── Clip transition filters ──────────────────────────────────────────────────
+
+function applyClipTransitions(
+  i: number,
+  clipDur: number,
+  tIn: TransitionType,
+  tOut: TransitionType,
+  transDur: number,
+  outW: number,
+  outH: number,
+  filterParts: string[],
+): string {
+  if (tIn === 'none' && tOut === 'none') return `[trim${i}]`
+
+  let cur = `[trim${i}]`
+  const D     = Math.max(0.05, Math.min(transDur, clipDur * 0.45))
+  const Df    = D.toFixed(3)
+  const CDf   = clipDur.toFixed(3)
+  const CDmDf = Math.max(0, clipDur - D).toFixed(3)
+
+  // Fade — FFmpeg built-in fade filter
+  if (tIn === 'fade' || tOut === 'fade') {
+    const fs: string[] = []
+    if (tIn  === 'fade') fs.push(`fade=t=in:st=0:d=${Df}`)
+    if (tOut === 'fade') fs.push(`fade=t=out:st=${CDmDf}:d=${Df}`)
+    const next = `[trim${i}_fade]`
+    filterParts.push(`${cur}${fs.join(',')}${next}`)
+    cur = next
+  }
+
+  // Blur — gblur toggled via timeline enable (on during transition zone)
+  if (tIn === 'blur') {
+    const next = `[trim${i}_buri]`
+    filterParts.push(`${cur}gblur=sigma=15:enable='lt(t,${Df})'${next}`)
+    cur = next
+  }
+  if (tOut === 'blur') {
+    const next = `[trim${i}_buro]`
+    filterParts.push(`${cur}gblur=sigma=15:enable='gte(t,${CDmDf})'${next}`)
+    cur = next
+  }
+
+  // Slides — overlay clip on black background with animated position
+  const isSlide = (t: TransitionType) => t.startsWith('slide-')
+  if (isSlide(tIn) || isSlide(tOut)) {
+    const inX  = tIn  === 'slide-left' ? -outW : tIn  === 'slide-right'  ?  outW : 0
+    const inY  = tIn  === 'slide-top'  ? -outH : tIn  === 'slide-bottom' ?  outH : 0
+    const outX = tOut === 'slide-left' ? -outW : tOut === 'slide-right'  ?  outW : 0
+    const outY = tOut === 'slide-top'  ? -outH : tOut === 'slide-bottom' ?  outH : 0
+
+    const axisExpr = (inOff: number, outOff: number): string => {
+      const parts: string[] = []
+      if (inOff  !== 0) parts.push(`if(lt(t,${Df}),round(${inOff}*(1-t/${Df})),0)`)
+      if (outOff !== 0) parts.push(`if(gte(t,${CDmDf}),round(${outOff}*((t-${CDmDf})/${Df})),0)`)
+      return parts.length === 0 ? '0' : parts.join('+')
+    }
+
+    const xExpr = axisExpr(inX, outX)
+    const yExpr = axisExpr(inY, outY)
+    const bgLabel = `[bg_slide_${i}]`
+    filterParts.push(`color=c=black:size=${outW}x${outH}:rate=60:duration=${CDf}${bgLabel}`)
+    const next = `[trim${i}_slide]`
+    filterParts.push(`${bgLabel}${cur}overlay=x='${xExpr}':y='${yExpr}'${next}`)
+    cur = next
+  }
+
+  return cur
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function exportVideo(opts: ExportOptions): Promise<Blob> {
   const {
     clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms,
-    clipColorCorrections, resolution, subtitleStyle, subtitleAppearance,
+    clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations,
+    resolution, subtitleStyle, subtitleAppearance,
     standardSubtitleAppearance, onProgress,
   } = opts
 
@@ -408,30 +481,116 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const ctx = canvas.getContext('2d')!
       ctx.clearRect(0, 0, outW, outH)
 
-      const fontSize = Math.round(outH * (ol.fontSize ?? 5) / 100)
-      const fontWeight = ol.fontWeight === 'bold' ? 'bold' : 'normal'
-      ctx.font = `${fontWeight} ${fontSize}px sans-serif`
-      // x/y are the CENTER of the element (matching preview's translate(-50%,-50%))
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-
-      const text = ol.text ?? 'Text'
+      const baseFontSize   = Math.round(outH * (ol.fontSize ?? 5) / 100)
+      const baseFontWeight = ol.fontWeight === 'bold' ? 'bold' : 'normal'
       const cx = Math.round(outW * ol.x / 100)
       const cy = Math.round(outH * ol.y / 100)
 
-      if ((ol.bgOpacity ?? 0) > 0) {
-        const hex = ol.bgColor ?? '#000000'
-        const r = parseInt(hex.slice(1, 3), 16)
-        const g = parseInt(hex.slice(3, 5), 16)
-        const b = parseInt(hex.slice(5, 7), 16)
-        const metrics = ctx.measureText(text)
-        const pad = Math.max(4, Math.round(fontSize * 0.15))
-        ctx.fillStyle = `rgba(${r},${g},${b},${ol.bgOpacity ?? 0})`
-        ctx.fillRect(cx - metrics.width / 2 - pad, cy - fontSize / 2 - pad, metrics.width + pad * 2, fontSize + pad * 2)
+      // Parse HTML into styled runs grouped by line
+      interface Run { text: string; bold: boolean; italic: boolean; relSize: number }
+      function htmlToLines(html: string): Run[][] {
+        const lines: Run[][] = [[]]
+        function walk(node: Node, bold: boolean, italic: boolean, relSize: number) {
+          if (node.nodeType === Node.TEXT_NODE) {
+            const t = node.textContent ?? ''
+            if (t) lines[lines.length - 1].push({ text: t, bold, italic, relSize })
+            return
+          }
+          if (node.nodeType !== Node.ELEMENT_NODE) return
+          const el = node as HTMLElement
+          const tag = el.tagName.toLowerCase()
+          if (tag === 'br') { lines.push([]); return }
+          if (tag === 'div' && lines[lines.length - 1].length > 0) lines.push([])
+          let b = bold  || tag === 'b' || tag === 'strong'
+          let i = italic || tag === 'em' || tag === 'i'
+          let rs = relSize
+          if (tag === 'span') {
+            const fs = el.style.fontSize
+            if (fs?.endsWith('em')) rs = relSize * parseFloat(fs)
+            if (el.style.fontWeight === 'bold' || el.style.fontWeight === '700') b = true
+            if (el.style.fontStyle === 'italic') i = true
+          }
+          for (const child of Array.from(node.childNodes)) walk(child, b, i, rs)
+        }
+        const doc = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html')
+        walk(doc.body, false, false, 1.0)
+        while (lines.length > 1 && lines[lines.length - 1].length === 0) lines.pop()
+        return lines
       }
 
-      ctx.fillStyle = ol.color ?? '#ffffff'
-      ctx.fillText(text, cx, cy)
+      const rawText = ol.text || 'Text'
+      const html = rawText.includes('<')
+        ? rawText
+        : rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
+      const richLines = htmlToLines(html)
+
+      // Helper: set ctx.font for a run
+      function setFont(run: Run) {
+        const fs = Math.round(baseFontSize * run.relSize)
+        const fw = run.bold ? 'bold' : baseFontWeight
+        const fi = run.italic ? 'italic' : 'normal'
+        ctx.font = `${fi} ${fw} ${fs}px sans-serif`
+      }
+
+      // Measure each line's total width
+      const lineWidths = richLines.map(line =>
+        line.reduce((total, run) => { setFont(run); return total + ctx.measureText(run.text).width }, 0)
+      )
+      const maxLineW   = Math.max(...lineWidths, 1)
+      const lineHeight = Math.round(baseFontSize * 1.35)
+      const totalTextH = richLines.length * lineHeight
+
+      const hasBg     = (ol.bgOpacity ?? 0) > 0
+      const borderW   = ol.borderWidth ?? 0
+      const hasBorder = borderW > 0
+      const radius    = Math.min(ol.borderRadius ?? (hasBg ? 4 : 0), 999)
+
+      if (hasBg || hasBorder) {
+        const padX = Math.max(8, Math.round(baseFontSize * 0.3))
+        const padY = Math.max(4, Math.round(baseFontSize * 0.15))
+        const rx = cx - maxLineW / 2 - padX
+        const ry = cy - totalTextH / 2 - padY
+        const rw = maxLineW + padX * 2
+        const rh = totalTextH + padY * 2
+        const r  = Math.min(radius, rw / 2, rh / 2)
+
+        if (hasBg) {
+          const hex = ol.bgColor ?? '#000000'
+          const ri = parseInt(hex.slice(1, 3), 16)
+          const gi = parseInt(hex.slice(3, 5), 16)
+          const bi = parseInt(hex.slice(5, 7), 16)
+          ctx.fillStyle = `rgba(${ri},${gi},${bi},${ol.bgOpacity})`
+          ctx.beginPath()
+          ctx.roundRect(rx, ry, rw, rh, r)
+          ctx.fill()
+        }
+
+        if (hasBorder) {
+          const bHex = ol.borderColor ?? '#ffffff'
+          const ri = parseInt(bHex.slice(1, 3), 16)
+          const gi = parseInt(bHex.slice(3, 5), 16)
+          const bi = parseInt(bHex.slice(5, 7), 16)
+          ctx.strokeStyle = `rgb(${ri},${gi},${bi})`
+          ctx.lineWidth = borderW
+          ctx.beginPath()
+          ctx.roundRect(rx, ry, rw, rh, r)
+          ctx.stroke()
+        }
+      }
+
+      // Draw each line's runs left-to-right, centered per line
+      ctx.textBaseline = 'middle'
+      ctx.textAlign = 'left'
+      richLines.forEach((line, li) => {
+        const lineY = cy - totalTextH / 2 + lineHeight * (li + 0.5)
+        let runX = cx - lineWidths[li] / 2
+        for (const run of line) {
+          setFont(run)
+          ctx.fillStyle = ol.color ?? '#ffffff'
+          ctx.fillText(run.text, runX, lineY)
+          runX += ctx.measureText(run.text).width
+        }
+      })
 
       const pngBlob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/png'))
       const pngArr = new Uint8Array(await pngBlob.arrayBuffer())
@@ -459,6 +618,8 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     }
     if (subEvents.length) console.log(`[export] wrote ${subEvents.length} subtitle strip PNGs (${STRIP_H}px tall)`)
 
+    const finalVideoLabels: string[] = []
+
     for (let i = 0; i < timings.length; i++) {
       const timing = timings[i]
       const { clip } = timing
@@ -485,10 +646,18 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const colorFilter = toFfmpegColorFilter(clipColorCorrections[clip.id] ?? COLOR_CORRECTION_DEFAULT)
       console.log(`[export] clip ${clip.id} colorFilter: "${colorFilter || '(none)'}"`)
       filterParts.push(`${trimFilter}${scaleAndCrop}${colorFilter ? ',' + colorFilter : ''}${trimLabel}`)
+
+      // Apply clip transitions (fade / blur / slide) — returns the final labeled stream
+      const tIn  = clipTransitionIn[clip.id]  ?? 'none'
+      const tOut = clipTransitionOut[clip.id] ?? 'none'
+      const clipDur = clip.trimEnd - clip.trimStart
+      const finalLabel = applyClipTransitions(i, clipDur, tIn, tOut, clipTransitionDurations[clip.id] ?? 0.5, outW, outH, filterParts)
+      finalVideoLabels.push(finalLabel)
+
       filterParts.push(`[${srcIdx}:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS[atrim${i}]`)
     }
 
-    const videoInputs = timings.map((_, i) => `[trim${i}]`).join('')
+    const videoInputs = finalVideoLabels.join('')
     const audioInputs = timings.map((_, i) => `[atrim${i}]`).join('')
     filterParts.push(`${videoInputs}concat=n=${timings.length}:v=1:a=0[concatv]`)
     filterParts.push(`${audioInputs}concat=n=${timings.length}:v=0:a=1[concata]`)

@@ -61,11 +61,14 @@ export interface OverlayLayer {
 
   // Text overlay
   text?: string
-  fontSize?: number  // % of frame height (e.g. 5 = 5%)
+  fontSize?: number     // % of frame height (e.g. 5 = 5%)
   fontWeight?: 'normal' | 'bold'
-  color?: string     // hex
-  bgColor?: string   // hex
-  bgOpacity?: number // 0–1
+  color?: string        // hex
+  bgColor?: string      // hex
+  bgOpacity?: number    // 0–1
+  borderRadius?: number // px
+  borderColor?: string  // hex
+  borderWidth?: number  // px
 }
 
 export interface Project {

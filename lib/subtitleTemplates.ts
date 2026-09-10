@@ -96,6 +96,55 @@ export const SUBTITLE_DEFAULT: SubtitleAppearance = {
   ...HIGHLIGHT_PRESETS[0].value,
 }
 
+// ─── Text overlay format presets ─────────────────────────────────────────────
+
+export interface TextFormatPreset {
+  id: string
+  label: string
+  value: {
+    color: string
+    fontWeight: 'normal' | 'bold'
+    bgColor: string
+    bgOpacity: number
+    borderRadius: number
+    borderColor: string
+    borderWidth: number
+  }
+}
+
+export const TEXT_FORMAT_PRESETS: TextFormatPreset[] = [
+  {
+    id: 'none',
+    label: 'None',
+    value: { color: '#ffffff', fontWeight: 'normal', bgColor: '#000000', bgOpacity: 0, borderRadius: 0, borderColor: '#ffffff', borderWidth: 0 },
+  },
+  {
+    id: 'dark-bg',
+    label: 'Dark BG',
+    value: { color: '#ffffff', fontWeight: 'bold', bgColor: '#000000', bgOpacity: 0.82, borderRadius: 6, borderColor: '#000000', borderWidth: 0 },
+  },
+  {
+    id: 'light-bg',
+    label: 'Light BG',
+    value: { color: '#111111', fontWeight: 'bold', bgColor: '#ffffff', bgOpacity: 0.9, borderRadius: 6, borderColor: '#ffffff', borderWidth: 0 },
+  },
+  {
+    id: 'outlined',
+    label: 'Outlined',
+    value: { color: '#ffffff', fontWeight: 'bold', bgColor: '#000000', bgOpacity: 0, borderRadius: 4, borderColor: '#ffffff', borderWidth: 2 },
+  },
+  {
+    id: 'filled',
+    label: 'Filled',
+    value: { color: '#000000', fontWeight: 'bold', bgColor: '#ffe000', bgOpacity: 1, borderRadius: 6, borderColor: '#ffe000', borderWidth: 0 },
+  },
+  {
+    id: 'pill',
+    label: 'Pill',
+    value: { color: '#ffffff', fontWeight: 'bold', bgColor: '#000000', bgOpacity: 0.8, borderRadius: 999, borderColor: '#000000', borderWidth: 0 },
+  },
+]
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 export function hexToRgba(hex: string, opacity: number): string {

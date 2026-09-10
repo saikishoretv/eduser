@@ -17,6 +17,9 @@ export default function ExportPanel({ onClose }: Props) {
   const clipCrops               = useEditorStore(s => s.clipCrops)
   const clipZooms               = useEditorStore(s => s.clipZooms)
   const clipColorCorrections    = useEditorStore(s => s.clipColorCorrections)
+  const clipTransitionIn        = useEditorStore(s => s.clipTransitionIn)
+  const clipTransitionOut       = useEditorStore(s => s.clipTransitionOut)
+  const clipTransitionDurations = useEditorStore(s => s.clipTransitionDurations)
   const subtitleStyle           = useEditorStore(s => s.subtitleStyle)
   const subtitleAppearance      = useEditorStore(s => s.subtitleAppearance)
   const standardSubtitleAppearance = useEditorStore(s => s.standardSubtitleAppearance)
@@ -50,6 +53,9 @@ export default function ExportPanel({ onClose }: Props) {
         clipCrops,
         clipZooms,
         clipColorCorrections,
+        clipTransitionIn,
+        clipTransitionOut,
+        clipTransitionDurations,
         resolution,
         subtitleStyle: burnSubtitles ? subtitleStyle : 'off',
         subtitleAppearance,
@@ -66,7 +72,7 @@ export default function ExportPanel({ onClose }: Props) {
       setError(err instanceof Error ? err.message : 'Export failed')
       setPhase('error')
     }
-  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipColorCorrections, resolution, burnSubtitles, subtitleStyle, subtitleAppearance, standardSubtitleAppearance])
+  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitleAppearance, standardSubtitleAppearance])
 
   const handleDownload = () => {
     if (!downloadUrl) return
@@ -86,7 +92,7 @@ export default function ExportPanel({ onClose }: Props) {
       >
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold text-white">Export</h2>
-          <button onClick={onClose} className="text-neutral-500 hover:text-white transition-colors text-lg leading-none">×</button>
+          <button onClick={onClose} aria-label="Close export panel" className="text-neutral-500 hover:text-white transition-colors text-lg leading-none">×</button>
         </div>
 
         {/* Options */}

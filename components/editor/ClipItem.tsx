@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useEditorStore } from '@/store/store'
 import { ClipTiming } from '@/lib/clipUtils'
 
@@ -32,6 +32,8 @@ export default function ClipItem({ timing, zoom }: Props) {
 
   const leftTrimRef  = useRef<{ startX: number; trimStart: number } | null>(null)
   const rightTrimRef = useRef<{ startX: number; trimEnd: number } | null>(null)
+  const [leftDragging,  setLeftDragging]  = useState(false)
+  const [rightDragging, setRightDragging] = useState(false)
 
   const colorClass = COLORS[index % COLORS.length]
   const widthPx = duration * zoom
@@ -46,6 +48,7 @@ export default function ClipItem({ timing, zoom }: Props) {
 
   function handleLeftTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    setLeftDragging(true)
     leftTrimRef.current = { startX: e.clientX, trimStart: clip.trimStart }
     const move = (ev: MouseEvent) => {
       if (!leftTrimRef.current) return
@@ -55,6 +58,7 @@ export default function ClipItem({ timing, zoom }: Props) {
     }
     const up = () => {
       leftTrimRef.current = null
+      setLeftDragging(false)
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
     }
@@ -64,6 +68,7 @@ export default function ClipItem({ timing, zoom }: Props) {
 
   function handleRightTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    setRightDragging(true)
     rightTrimRef.current = { startX: e.clientX, trimEnd: clip.trimEnd }
     const move = (ev: MouseEvent) => {
       if (!rightTrimRef.current) return
@@ -73,6 +78,7 @@ export default function ClipItem({ timing, zoom }: Props) {
     }
     const up = () => {
       rightTrimRef.current = null
+      setRightDragging(false)
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
     }
@@ -99,13 +105,15 @@ export default function ClipItem({ timing, zoom }: Props) {
       )}
       {/* Left trim handle */}
       <div
-        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 bg-black/30 hover:bg-black/50"
+        aria-label="Trim start"
+        className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-10 transition-colors ${leftDragging ? 'bg-white/40' : 'bg-black/40 hover:bg-white/25'}`}
         onMouseDown={handleLeftTrimMouseDown}
         onClick={e => e.stopPropagation()}
       />
       {/* Right trim handle */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 bg-black/30 hover:bg-black/50"
+        aria-label="Trim end"
+        className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-10 transition-colors ${rightDragging ? 'bg-white/40' : 'bg-black/40 hover:bg-white/25'}`}
         onMouseDown={handleRightTrimMouseDown}
         onClick={e => e.stopPropagation()}
       />

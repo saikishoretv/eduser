@@ -9,6 +9,7 @@ import { ColorCorrection, COLOR_CORRECTION_DEFAULT } from '@/lib/colorPresets'
 
 export type ZoomPreset = 'none' | 'punch' | 'ken-burns'
 export type SubtitleStyle = 'off' | 'standard' | 'highlight'
+export type TransitionType = 'none' | 'fade' | 'slide-left' | 'slide-right' | 'slide-top' | 'slide-bottom' | 'blur'
 
 interface EditorStore {
   projects: Project[]
@@ -27,6 +28,8 @@ interface EditorStore {
   clipZooms: Record<string, number>
   clipZoomPresets: Record<string, ZoomPreset>
   clipTransitionDurations: Record<string, number>
+  clipTransitionIn: Record<string, TransitionType>
+  clipTransitionOut: Record<string, TransitionType>
   clipColorCorrections: Record<string, ColorCorrection>
   subtitleStyle: SubtitleStyle
   subtitleAppearance: SubtitleAppearance
@@ -45,6 +48,8 @@ interface EditorStore {
   setClipZoom: (clipId: string, zoom: number) => void
   setClipZoomPreset: (clipId: string, preset: ZoomPreset) => void
   setClipTransitionDuration: (clipId: string, duration: number) => void
+  setClipTransitionIn: (clipId: string, t: TransitionType) => void
+  setClipTransitionOut: (clipId: string, t: TransitionType) => void
   setClipColorCorrection: (clipId: string, cc: ColorCorrection) => void
   setAllClipsColorCorrection: (cc: ColorCorrection) => void
   addAudioLayer: (layer: AudioLayer) => void
@@ -120,6 +125,8 @@ export const useEditorStore = create<EditorStore>()(
       clipZooms: {},
       clipZoomPresets: {},
       clipTransitionDurations: {},
+      clipTransitionIn: {},
+      clipTransitionOut: {},
       clipColorCorrections: {},
       subtitleStyle: 'off' as SubtitleStyle,
       subtitleAppearance: SUBTITLE_DEFAULT,
@@ -243,6 +250,8 @@ export const useEditorStore = create<EditorStore>()(
       setClipZoom: (clipId, zoom) => set(s => ({ clipZooms: { ...s.clipZooms, [clipId]: Math.max(1, Math.min(3, zoom)) } })),
       setClipZoomPreset: (clipId, preset) => set(s => ({ clipZoomPresets: { ...s.clipZoomPresets, [clipId]: preset } })),
       setClipTransitionDuration: (clipId, duration) => set(s => ({ clipTransitionDurations: { ...s.clipTransitionDurations, [clipId]: Math.max(0.1, Math.min(5, duration)) } })),
+      setClipTransitionIn:  (clipId, t) => set(s => ({ clipTransitionIn:  { ...s.clipTransitionIn,  [clipId]: t } })),
+      setClipTransitionOut: (clipId, t) => set(s => ({ clipTransitionOut: { ...s.clipTransitionOut, [clipId]: t } })),
       setClipColorCorrection: (clipId, cc) => set(s => ({ clipColorCorrections: { ...s.clipColorCorrections, [clipId]: cc } })),
       setAllClipsColorCorrection: (cc) => {
         const project = activeProject(get())
@@ -604,6 +613,8 @@ export const useEditorStore = create<EditorStore>()(
         clipZooms: s.clipZooms,
         clipZoomPresets: s.clipZoomPresets,
         clipTransitionDurations: s.clipTransitionDurations,
+        clipTransitionIn: s.clipTransitionIn,
+        clipTransitionOut: s.clipTransitionOut,
         clipColorCorrections: s.clipColorCorrections,
         subtitleStyle: s.subtitleStyle,
         subtitleAppearance: s.subtitleAppearance,

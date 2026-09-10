@@ -38,7 +38,11 @@ export default function EditorShell({ projectId }: Props) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.isContentEditable
+      ) return
 
       const s = useEditorStore.getState()
       const audioMode   = !!s.selectedAudioLayerId
@@ -47,6 +51,16 @@ export default function EditorShell({ projectId }: Props) {
       if (e.key === ' ') {
         e.preventDefault()
         s.setPlaying(!s.isPlaying)
+      } else if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        const nudge = e.shiftKey ? 1 : 0.1
+        const dir   = e.key === 'ArrowLeft' ? -1 : 1
+        s.setPlaying(false)
+        s.setPlayhead(Math.max(0, s.playheadTime + dir * nudge))
+      } else if (e.key === 'Escape') {
+        s.clearSelection()
+        s.setSelectedAudioLayerId(null)
+        s.setSelectedOverlayId(null)
       } else if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
         if (!overlayMode) audioMode ? s.splitAudioLayer() : s.split()
       } else if (e.key === 'm' && !e.metaKey && !e.ctrlKey) {

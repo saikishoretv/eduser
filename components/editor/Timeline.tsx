@@ -268,6 +268,7 @@ export default function Timeline() {
           <div className="w-px h-3 bg-neutral-700" />
           <button
             onClick={() => setZoom(zoom / 1.5)}
+            aria-label="Zoom out"
             className="w-6 h-6 flex items-center justify-center rounded text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors text-base leading-none"
           >
             −
@@ -277,6 +278,7 @@ export default function Timeline() {
           </span>
           <button
             onClick={() => setZoom(zoom * 1.5)}
+            aria-label="Zoom in"
             className="w-6 h-6 flex items-center justify-center rounded text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors text-base leading-none"
           >
             +

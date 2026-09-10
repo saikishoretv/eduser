@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { AudioLayer } from '@/types'
 import { useEditorStore } from '@/store/store'
 
@@ -17,6 +17,8 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
   const dragRef      = useRef<{ startX: number; startAt: number } | null>(null)
   const leftTrimRef  = useRef<{ startX: number; trimStart: number; startAt: number } | null>(null)
   const rightTrimRef = useRef<{ startX: number; trimEnd: number } | null>(null)
+  const [leftDragging,  setLeftDragging]  = useState(false)
+  const [rightDragging, setRightDragging] = useState(false)
 
   const layerDuration = layer.trimEnd - layer.trimStart
   const left  = layer.startAt * zoom
@@ -43,6 +45,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
 
   function handleLeftTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    setLeftDragging(true)
     leftTrimRef.current = { startX: e.clientX, trimStart: layer.trimStart, startAt: layer.startAt }
     const move = (ev: MouseEvent) => {
       if (!leftTrimRef.current) return
@@ -54,6 +57,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
     }
     const up = () => {
       leftTrimRef.current = null
+      setLeftDragging(false)
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
     }
@@ -63,6 +67,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
 
   function handleRightTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    setRightDragging(true)
     rightTrimRef.current = { startX: e.clientX, trimEnd: layer.trimEnd }
     const move = (ev: MouseEvent) => {
       if (!rightTrimRef.current) return
@@ -72,6 +77,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
     }
     const up = () => {
       rightTrimRef.current = null
+      setRightDragging(false)
       window.removeEventListener('mousemove', move)
       window.removeEventListener('mouseup', up)
     }
@@ -103,13 +109,15 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
 
       {/* Left trim handle */}
       <div
-        className="absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 bg-black/30 hover:bg-black/50"
+        aria-label="Trim start"
+        className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-10 transition-colors ${leftDragging ? 'bg-white/40' : 'bg-black/40 hover:bg-white/25'}`}
         onMouseDown={handleLeftTrimMouseDown}
         onClick={e => e.stopPropagation()}
       />
       {/* Right trim handle */}
       <div
-        className="absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 bg-black/30 hover:bg-black/50"
+        aria-label="Trim end"
+        className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-10 transition-colors ${rightDragging ? 'bg-white/40' : 'bg-black/40 hover:bg-white/25'}`}
         onMouseDown={handleRightTrimMouseDown}
         onClick={e => e.stopPropagation()}
       />
@@ -130,11 +138,13 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
               value={layer.volume}
               onChange={e => updateAudioLayer(layer.id, { volume: parseFloat(e.target.value) })}
               onClick={e => e.stopPropagation()}
+              aria-label="Volume"
               className="w-16 accent-emerald-400"
             />
             {/* Delete */}
             <button
               onClick={e => { e.stopPropagation(); removeAudioLayer(layer.id) }}
+              aria-label="Remove audio layer"
               className="w-4 h-4 flex items-center justify-center text-red-400 hover:text-red-300 text-base leading-none"
             >
               ×

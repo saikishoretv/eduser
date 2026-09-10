@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useCallback } from 'react'
 import { useEditorStore } from '@/store/store'
-import { ZoomPreset } from '@/store/store'
+import { ZoomPreset, TransitionType } from '@/store/store'
 import { getClipTimings, formatTime } from '@/lib/clipUtils'
 import { ClipTiming } from '@/lib/clipUtils'
 import { hexToRgba } from '@/lib/subtitleTemplates'
@@ -50,11 +50,53 @@ function applyVideoState(
   scale: number,
   cropX: number,
   cropY: number,
-  hasFormat: boolean
+  hasFormat: boolean,
+  slideX = 0,
+  slideY = 0,
 ) {
-  video.style.transform = scale !== 1 ? `scale(${scale})` : ''
+  const parts: string[] = []
+  if (slideX !== 0 || slideY !== 0) parts.push(`translate(${slideX.toFixed(1)}%, ${slideY.toFixed(1)}%)`)
+  if (scale !== 1) parts.push(`scale(${scale})`)
+  video.style.transform = parts.join(' ')
   video.style.transformOrigin = `${cropX}% ${cropY}%`
   if (hasFormat) video.style.objectPosition = `${cropX}% ${cropY}%`
+}
+
+function computeTransitionState(
+  timeInClip: number,
+  clipDuration: number,
+  transitionIn: TransitionType,
+  transitionOut: TransitionType,
+  transitionDuration: number,
+): { fadeOpacity: number; slideX: number; slideY: number; blurPx: number } {
+  const td = Math.max(0.01, Math.min(transitionDuration, clipDuration * 0.45))
+  let fadeOpacity = 0, slideX = 0, slideY = 0, blurPx = 0
+
+  if (transitionIn !== 'none' && timeInClip < td) {
+    const p = Math.max(0, Math.min(1, timeInClip / td))  // 0 → 1
+    switch (transitionIn) {
+      case 'fade':         fadeOpacity = Math.max(fadeOpacity, 1 - p); break
+      case 'slide-left':   slideX = -(1 - p) * 100; break
+      case 'slide-right':  slideX = (1 - p) * 100; break
+      case 'slide-top':    slideY = -(1 - p) * 100; break
+      case 'slide-bottom': slideY = (1 - p) * 100; break
+      case 'blur':         blurPx = Math.max(blurPx, (1 - p) * 20); break
+    }
+  }
+
+  if (transitionOut !== 'none' && timeInClip > clipDuration - td) {
+    const p = Math.max(0, Math.min(1, (clipDuration - timeInClip) / td))  // 1 → 0
+    switch (transitionOut) {
+      case 'fade':         fadeOpacity = Math.max(fadeOpacity, 1 - p); break
+      case 'slide-left':   slideX = -(1 - p) * 100; break
+      case 'slide-right':  slideX = (1 - p) * 100; break
+      case 'slide-top':    slideY = -(1 - p) * 100; break
+      case 'slide-bottom': slideY = (1 - p) * 100; break
+      case 'blur':         blurPx = Math.max(blurPx, (1 - p) * 20); break
+    }
+  }
+
+  return { fadeOpacity, slideX, slideY, blurPx }
 }
 
 const EMPTY_CLIPS: import('@/types').Clip[] = []
@@ -65,6 +107,7 @@ const EMPTY_OVERLAY_LAYERS: import('@/types').OverlayLayer[] = []
 export default function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const transitionOverlayRef = useRef<HTMLDivElement>(null)
   const activeClipIdxRef = useRef<number>(0)
   const lastSyncRef = useRef<number>(0)
   const animRafRef = useRef<number>(0)
@@ -86,6 +129,8 @@ export default function Preview() {
   const clipZooms = useEditorStore(s => s.clipZooms)
   const clipZoomPresets = useEditorStore(s => s.clipZoomPresets)
   const clipTransitionDurations = useEditorStore(s => s.clipTransitionDurations)
+  const clipTransitionIn  = useEditorStore(s => s.clipTransitionIn)
+  const clipTransitionOut = useEditorStore(s => s.clipTransitionOut)
   const clipColorCorrections = useEditorStore(s => s.clipColorCorrections)
   const subtitleStyle = useEditorStore(s => s.subtitleStyle)
   const subtitleAppearance = useEditorStore(s => s.subtitleAppearance)
@@ -138,6 +183,8 @@ export default function Preview() {
   const clipZoomsRef = useRef(clipZooms)
   const clipZoomPresetsRef = useRef(clipZoomPresets)
   const clipTransitionDurationsRef = useRef(clipTransitionDurations)
+  const clipTransitionInRef  = useRef(clipTransitionIn)
+  const clipTransitionOutRef = useRef(clipTransitionOut)
   const clipColorCorrectionsRef = useRef(clipColorCorrections)
   const outputFormatRef = useRef(outputFormat)
   const timingsRef = useRef(timings)
@@ -145,6 +192,8 @@ export default function Preview() {
   clipZoomsRef.current = clipZooms
   clipZoomPresetsRef.current = clipZoomPresets
   clipTransitionDurationsRef.current = clipTransitionDurations
+  clipTransitionInRef.current  = clipTransitionIn
+  clipTransitionOutRef.current = clipTransitionOut
   clipColorCorrectionsRef.current = clipColorCorrections
   outputFormatRef.current = outputFormat
   timingsRef.current = timings
@@ -212,7 +261,11 @@ export default function Preview() {
     if (!video) return
     const t = previewTime ?? playheadTime
     const timing = findTiming(t)
-    if (!timing) { video.style.transform = ''; return }
+    if (!timing) {
+      video.style.transform = ''
+      if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = '0'
+      return
+    }
     applyClip(timing.index, timing.clip.trimStart + (t - timing.start))
     const { clip } = timing
     const dur = clip.trimEnd - clip.trimStart
@@ -222,10 +275,17 @@ export default function Preview() {
     const crop = clipCrops[clip.id] ?? { x: 50, y: 50 }
     const transitionSec = clipTransitionDurations[clip.id] ?? 0.5
     const { scale, cropX, cropY } = calcAnimatedState(preset, p, targetZoom, crop, transitionSec, dur)
-    applyVideoState(video, scale, cropX, cropY, !!outputFormat)
+    const timeInClip = t - timing.start
+    const tIn  = clipTransitionIn[clip.id]  ?? 'none'
+    const tOut = clipTransitionOut[clip.id] ?? 'none'
+    const { fadeOpacity, slideX, slideY, blurPx } = computeTransitionState(timeInClip, dur, tIn, tOut, transitionSec)
+    applyVideoState(video, scale, cropX, cropY, !!outputFormat, slideX, slideY)
+    const cc = clipColorCorrections[clip.id] ?? COLOR_CORRECTION_DEFAULT
+    video.style.filter = blurPx > 0 ? `${toCssFilter(cc)} blur(${blurPx.toFixed(1)}px)` : toCssFilter(cc)
+    if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = String(fadeOpacity)
     syncAudioToTime(t, false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playheadTime, previewTime, isPlaying, clipKey, clipZooms, clipZoomPresets, clipCrops, clipTransitionDurations, clipColorCorrections, outputFormat])
+  }, [playheadTime, previewTime, isPlaying, clipKey, clipZooms, clipZoomPresets, clipCrops, clipTransitionDurations, clipTransitionIn, clipTransitionOut, clipColorCorrections, outputFormat])
 
   // Reactively apply color filter when corrections change (e.g. while playing or panel open)
   useEffect(() => {
@@ -237,7 +297,7 @@ export default function Preview() {
     video.style.filter = toCssFilter(cc)
   }, [clipColorCorrections])
 
-  // RAF animation loop — runs during playback to animate zoom presets smoothly
+  // RAF animation loop — runs during playback to animate zoom presets and transitions smoothly
   useEffect(() => {
     if (!isPlaying) {
       cancelAnimationFrame(animRafRef.current)
@@ -256,7 +316,14 @@ export default function Preview() {
           const crop = clipCropsRef.current[clip.id] ?? { x: 50, y: 50 }
           const transitionSec = clipTransitionDurationsRef.current[clip.id] ?? 0.5
           const { scale, cropX, cropY } = calcAnimatedState(preset, p, targetZoom, crop, transitionSec, dur)
-          applyVideoState(video, scale, cropX, cropY, !!outputFormatRef.current)
+          const timeInClip = video.currentTime - clip.trimStart
+          const tIn  = clipTransitionInRef.current[clip.id]  ?? 'none'
+          const tOut = clipTransitionOutRef.current[clip.id] ?? 'none'
+          const { fadeOpacity, slideX, slideY, blurPx } = computeTransitionState(timeInClip, dur, tIn, tOut, transitionSec)
+          applyVideoState(video, scale, cropX, cropY, !!outputFormatRef.current, slideX, slideY)
+          const cc = clipColorCorrectionsRef.current[clip.id] ?? COLOR_CORRECTION_DEFAULT
+          video.style.filter = blurPx > 0 ? `${toCssFilter(cc)} blur(${blurPx.toFixed(1)}px)` : toCssFilter(cc)
+          if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = String(fadeOpacity)
         }
       }
       animRafRef.current = requestAnimationFrame(tick)
@@ -425,6 +492,12 @@ export default function Preview() {
                 : undefined
               }
             />
+            {/* Transition fade overlay — opacity driven imperatively by seek/RAF */}
+            <div
+              ref={transitionOverlayRef}
+              className="absolute inset-0 bg-black pointer-events-none"
+              style={{ opacity: 0 }}
+            />
             {/* Subtitle overlay */}
             {activeSegment && subtitleStyle === 'standard' && (
               <div className="absolute bottom-8 left-0 right-0 flex justify-center pointer-events-none px-4">
@@ -506,6 +579,11 @@ export default function Preview() {
                 if (ol.type === 'text') {
                   const container = containerRef.current
                   const h = container?.clientHeight ?? 400
+                  // Support both plain text (legacy \n) and rich HTML from the editor
+                  const rawText = ol.text || 'Text'
+                  const html = rawText.includes('<')
+                    ? rawText
+                    : rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
                   return (
                     <div
                       key={ol.id}
@@ -517,19 +595,19 @@ export default function Preview() {
                         backgroundColor: (ol.bgOpacity ?? 0) > 0
                           ? `${ol.bgColor ?? '#000000'}${Math.round((ol.bgOpacity ?? 0) * 255).toString(16).padStart(2, '0')}`
                           : 'transparent',
-                        padding: (ol.bgOpacity ?? 0) > 0 ? '2px 6px' : undefined,
-                        borderRadius: (ol.bgOpacity ?? 0) > 0 ? 4 : undefined,
-                        whiteSpace: 'pre',
+                        padding: (ol.bgOpacity ?? 0) > 0 || (ol.borderWidth ?? 0) > 0 ? '2px 8px' : undefined,
+                        borderRadius: ol.borderRadius ?? ((ol.bgOpacity ?? 0) > 0 ? 4 : 0),
+                        border: (ol.borderWidth ?? 0) > 0 ? `${ol.borderWidth}px solid ${ol.borderColor ?? '#ffffff'}` : undefined,
+                        lineHeight: 1.35,
                       }}
+                      dangerouslySetInnerHTML={{ __html: html }}
                       onClick={e => { e.stopPropagation(); setSelectedOverlayId(ol.id) }}
                       onMouseDown={e => {
                         if (!isSel) return
                         e.stopPropagation()
                         overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
                       }}
-                    >
-                      {ol.text || 'Text'}
-                    </div>
+                    />
                   )
                 }
                 return null
@@ -553,6 +631,7 @@ export default function Preview() {
       <div className="flex items-center justify-center gap-4 py-3 border-t border-neutral-800 shrink-0 relative">
         <button
           onClick={() => setPlaying(!isPlaying)}
+          aria-label={isPlaying ? 'Pause' : 'Play'}
           className="w-9 h-9 rounded-full bg-neutral-700 hover:bg-neutral-600 flex items-center justify-center transition-colors"
         >
           {isPlaying ? (
