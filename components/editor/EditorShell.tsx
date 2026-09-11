@@ -79,6 +79,12 @@ export default function EditorShell({ projectId }: Props) {
       } else if (e.key === 'd' && (e.metaKey || e.ctrlKey)) {
         e.preventDefault()
         overlayMode ? s.duplicateOverlayLayer() : audioMode ? s.duplicateAudioLayer() : s.duplicate()
+      } else if (e.key === 'z' && (e.metaKey || e.ctrlKey) && !e.shiftKey) {
+        e.preventDefault()
+        s.undo()
+      } else if ((e.key === 'z' && (e.metaKey || e.ctrlKey) && e.shiftKey) || (e.key === 'y' && (e.metaKey || e.ctrlKey))) {
+        e.preventDefault()
+        s.redo()
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
         if (overlayMode) s.removeOverlayLayer(s.selectedOverlayId!)
         else if (audioMode) s.removeAudioLayer(s.selectedAudioLayerId!)

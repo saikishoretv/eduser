@@ -26,6 +26,7 @@ export default function ClipItem({ timing, zoom }: Props) {
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
   const setSelectedOverlayId    = useEditorStore(s => s.setSelectedOverlayId)
   const updateClip              = useEditorStore(s => s.updateClip)
+  const pushUndo                = useEditorStore(s => s.pushUndo)
   const sourceDuration          = useEditorStore(s =>
     s.projects.find(p => p.id === s.activeProjectId)?.sources.find(src => src.id === clip.sourceId)?.duration ?? clip.trimEnd
   )
@@ -48,6 +49,7 @@ export default function ClipItem({ timing, zoom }: Props) {
 
   function handleLeftTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     setLeftDragging(true)
     leftTrimRef.current = { startX: e.clientX, trimStart: clip.trimStart }
     const move = (ev: MouseEvent) => {
@@ -68,6 +70,7 @@ export default function ClipItem({ timing, zoom }: Props) {
 
   function handleRightTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     setRightDragging(true)
     rightTrimRef.current = { startX: e.clientX, trimEnd: clip.trimEnd }
     const move = (ev: MouseEvent) => {

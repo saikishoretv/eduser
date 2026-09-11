@@ -14,6 +14,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
   const updateAudioLayer        = useEditorStore(s => s.updateAudioLayer)
   const removeAudioLayer        = useEditorStore(s => s.removeAudioLayer)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
+  const pushUndo                = useEditorStore(s => s.pushUndo)
   const dragRef      = useRef<{ startX: number; startAt: number } | null>(null)
   const leftTrimRef  = useRef<{ startX: number; trimStart: number; startAt: number } | null>(null)
   const rightTrimRef = useRef<{ startX: number; trimEnd: number } | null>(null)
@@ -26,6 +27,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
 
   function handleMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     dragRef.current = { startX: e.clientX, startAt: layer.startAt }
 
     const handleMove = (ev: MouseEvent) => {
@@ -45,6 +47,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
 
   function handleLeftTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     setLeftDragging(true)
     leftTrimRef.current = { startX: e.clientX, trimStart: layer.trimStart, startAt: layer.startAt }
     const move = (ev: MouseEvent) => {
@@ -67,6 +70,7 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
 
   function handleRightTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     setRightDragging(true)
     rightTrimRef.current = { startX: e.clientX, trimEnd: layer.trimEnd }
     const move = (ev: MouseEvent) => {

@@ -138,6 +138,7 @@ export default function Preview() {
   const setPlayhead = useEditorStore(s => s.setPlayhead)
   const setPlaying = useEditorStore(s => s.setPlaying)
   const setClipCrop = useEditorStore(s => s.setClipCrop)
+  const pushUndo    = useEditorStore(s => s.pushUndo)
 
   const timings = getClipTimings(clips)
   const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
@@ -398,6 +399,7 @@ export default function Preview() {
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (!outputFormat || !activeClipId) return
     e.preventDefault()
+    pushUndo()
     dragRef.current = {
       startX: e.clientX,
       startY: e.clientY,
@@ -405,7 +407,7 @@ export default function Preview() {
       cropY: currentCrop.y,
       clipId: activeClipId,
     }
-  }, [outputFormat, activeClipId, currentCrop])
+  }, [outputFormat, activeClipId, currentCrop, pushUndo])
 
   useEffect(() => {
     const handleMove = (e: MouseEvent) => {
@@ -571,6 +573,7 @@ export default function Preview() {
                       onMouseDown={e => {
                         if (!isSel) return
                         e.stopPropagation()
+                        pushUndo()
                         overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
                       }}
                     />
@@ -605,6 +608,7 @@ export default function Preview() {
                       onMouseDown={e => {
                         if (!isSel) return
                         e.stopPropagation()
+                        pushUndo()
                         overlayDragRef.current = { startX: e.clientX, startY: e.clientY, ox: ol.x, oy: ol.y, id: ol.id }
                       }}
                     />

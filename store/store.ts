@@ -11,6 +11,17 @@ export type ZoomPreset = 'none' | 'punch' | 'ken-burns'
 export type SubtitleStyle = 'off' | 'standard' | 'highlight'
 export type TransitionType = 'none' | 'fade' | 'slide-left' | 'slide-right' | 'slide-top' | 'slide-bottom' | 'blur'
 
+type UndoSnapshot = {
+  projects: Project[]
+  clipCrops: Record<string, { x: number; y: number }>
+  clipZooms: Record<string, number>
+  clipZoomPresets: Record<string, ZoomPreset>
+  clipTransitionDurations: Record<string, number>
+  clipTransitionIn: Record<string, TransitionType>
+  clipTransitionOut: Record<string, TransitionType>
+  clipColorCorrections: Record<string, ColorCorrection>
+}
+
 interface EditorStore {
   projects: Project[]
   activeProjectId: string | null
@@ -34,6 +45,9 @@ interface EditorStore {
   subtitleStyle: SubtitleStyle
   subtitleAppearance: SubtitleAppearance
   standardSubtitleAppearance: StandardSubtitleAppearance
+
+  undoPast: UndoSnapshot[]
+  undoFuture: UndoSnapshot[]
 
   createProject: (name: string, source: SourceVideo) => string
   deleteProject: (id: string) => void
@@ -91,6 +105,10 @@ interface EditorStore {
   duplicate: () => void
   merge: () => void
   deleteSelected: () => void
+
+  pushUndo: () => void
+  undo: () => void
+  redo: () => void
 }
 
 function uid(): string {
@@ -103,6 +121,26 @@ function activeProject(s: EditorStore): Project | undefined {
 
 function replaceClips(projects: Project[], projectId: string, clips: Clip[]): Project[] {
   return projects.map(p => (p.id === projectId ? { ...p, clips } : p))
+}
+
+function captureSnapshot(s: EditorStore): UndoSnapshot {
+  return {
+    projects: s.projects,
+    clipCrops: s.clipCrops,
+    clipZooms: s.clipZooms,
+    clipZoomPresets: s.clipZoomPresets,
+    clipTransitionDurations: s.clipTransitionDurations,
+    clipTransitionIn: s.clipTransitionIn,
+    clipTransitionOut: s.clipTransitionOut,
+    clipColorCorrections: s.clipColorCorrections,
+  }
+}
+
+function withUndo(s: EditorStore): { undoPast: UndoSnapshot[]; undoFuture: UndoSnapshot[] } {
+  return {
+    undoPast: [...s.undoPast.slice(-9), captureSnapshot(s)],
+    undoFuture: [],
+  }
 }
 
 export const useEditorStore = create<EditorStore>()(
@@ -131,6 +169,8 @@ export const useEditorStore = create<EditorStore>()(
       subtitleStyle: 'off' as SubtitleStyle,
       subtitleAppearance: SUBTITLE_DEFAULT,
       standardSubtitleAppearance: STANDARD_SUBTITLE_DEFAULT,
+      undoPast: [],
+      undoFuture: [],
 
       createProject: (name, source) => {
         const id = uid()
@@ -173,6 +213,7 @@ export const useEditorStore = create<EditorStore>()(
             ? { ...p, audioLayers: [...(p.audioLayers ?? []), layer] }
             : p
         ),
+        ...withUndo(s),
       })),
 
       removeAudioLayer: (layerId) => {
@@ -184,6 +225,7 @@ export const useEditorStore = create<EditorStore>()(
               : p
           ),
           selectedAudioLayerId: s.selectedAudioLayerId === layerId ? null : s.selectedAudioLayerId,
+          ...withUndo(s),
         }))
       },
 
@@ -213,6 +255,7 @@ export const useEditorStore = create<EditorStore>()(
             : p
         ),
         selectedOverlayId: layer.id,
+        ...withUndo(s),
       })),
       removeOverlayLayer: (id) => {
         deleteBlob(id).catch(() => {})
@@ -223,6 +266,7 @@ export const useEditorStore = create<EditorStore>()(
               : p
           ),
           selectedOverlayId: s.selectedOverlayId === id ? null : s.selectedOverlayId,
+          ...withUndo(s),
         }))
       },
       updateOverlayLayer: (id, patch) => set(s => ({
@@ -249,17 +293,32 @@ export const useEditorStore = create<EditorStore>()(
       setClipCrop: (clipId, x, y) => set(s => ({ clipCrops: { ...s.clipCrops, [clipId]: { x, y } } })),
       setClipZoom: (clipId, zoom) => set(s => ({ clipZooms: { ...s.clipZooms, [clipId]: Math.max(1, Math.min(3, zoom)) } })),
       setClipZoomPreset: (clipId, preset) => set(s => ({ clipZoomPresets: { ...s.clipZoomPresets, [clipId]: preset } })),
-      setClipTransitionDuration: (clipId, duration) => set(s => ({ clipTransitionDurations: { ...s.clipTransitionDurations, [clipId]: Math.max(0.1, Math.min(5, duration)) } })),
-      setClipTransitionIn:  (clipId, t) => set(s => ({ clipTransitionIn:  { ...s.clipTransitionIn,  [clipId]: t } })),
-      setClipTransitionOut: (clipId, t) => set(s => ({ clipTransitionOut: { ...s.clipTransitionOut, [clipId]: t } })),
-      setClipColorCorrection: (clipId, cc) => set(s => ({ clipColorCorrections: { ...s.clipColorCorrections, [clipId]: cc } })),
-      setAllClipsColorCorrection: (cc) => {
-        const project = activeProject(get())
-        if (!project) return
+      setClipTransitionDuration: (clipId, duration) => set(s => ({
+        clipTransitionDurations: { ...s.clipTransitionDurations, [clipId]: Math.max(0.1, Math.min(5, duration)) },
+        ...withUndo(s),
+      })),
+      setClipTransitionIn: (clipId, t) => set(s => ({
+        clipTransitionIn: { ...s.clipTransitionIn, [clipId]: t },
+        ...withUndo(s),
+      })),
+      setClipTransitionOut: (clipId, t) => set(s => ({
+        clipTransitionOut: { ...s.clipTransitionOut, [clipId]: t },
+        ...withUndo(s),
+      })),
+      setClipColorCorrection: (clipId, cc) => set(s => ({
+        clipColorCorrections: { ...s.clipColorCorrections, [clipId]: cc },
+        ...withUndo(s),
+      })),
+      setAllClipsColorCorrection: (cc) => set(s => {
+        const project = activeProject(s)
+        if (!project) return s
         const patch: Record<string, ColorCorrection> = {}
         project.clips.forEach(c => { patch[c.id] = cc })
-        set(s => ({ clipColorCorrections: { ...s.clipColorCorrections, ...patch } }))
-      },
+        return {
+          clipColorCorrections: { ...s.clipColorCorrections, ...patch },
+          ...withUndo(s),
+        }
+      }),
       setSubtitleStyle: (style) => set({ subtitleStyle: style }),
       setSubtitleAppearance: (appearance) => set({ subtitleAppearance: appearance }),
       setStandardSubtitleAppearance: (appearance) => set({ standardSubtitleAppearance: appearance }),
@@ -283,6 +342,7 @@ export const useEditorStore = create<EditorStore>()(
           return {
             projects: s.projects.map(p => p.id === project.id ? { ...p, audioLayers } : p),
             selectedAudioLayerId: null,
+            ...withUndo(s),
           }
         })
       },
@@ -301,6 +361,7 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedAudioLayerId: null,
+            ...withUndo(s),
           }
         })
       },
@@ -328,6 +389,7 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedAudioLayerId: newLayer.id,
+            ...withUndo(s),
           }
         })
       },
@@ -346,6 +408,7 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedAudioLayerId: newLayer.id,
+            ...withUndo(s),
           }
         })
       },
@@ -364,6 +427,7 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedOverlayId: null,
+            ...withUndo(s),
           }
         })
       },
@@ -391,6 +455,7 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedOverlayId: newLayer.id,
+            ...withUndo(s),
           }
         })
       },
@@ -409,6 +474,7 @@ export const useEditorStore = create<EditorStore>()(
                 : p
             ),
             selectedOverlayId: newLayer.id,
+            ...withUndo(s),
           }
         })
       },
@@ -440,6 +506,7 @@ export const useEditorStore = create<EditorStore>()(
                 ? { ...p, audioLayers: [...(p.audioLayers ?? []), layer] }
                 : p
             ),
+            ...withUndo(s),
           }
         })
       },
@@ -465,6 +532,7 @@ export const useEditorStore = create<EditorStore>()(
             clipColorCorrections: oldCc
               ? { ...s.clipColorCorrections, [first.id]: oldCc, [second.id]: oldCc }
               : s.clipColorCorrections,
+            ...withUndo(s),
           }
         })
       },
@@ -481,6 +549,7 @@ export const useEditorStore = create<EditorStore>()(
             selectedClipIds: [],
             playheadTime: Math.min(s.playheadTime, newDuration),
             projects: replaceClips(s.projects, project.id, clips),
+            ...withUndo(s),
           }
         })
       },
@@ -521,6 +590,7 @@ export const useEditorStore = create<EditorStore>()(
             projects: replaceClips(s.projects, project.id, clips),
             selectedClipIds: newClips.map(c => c.id),
             clipColorCorrections: { ...s.clipColorCorrections, ...ccPatch },
+            ...withUndo(s),
           }
         })
       },
@@ -547,6 +617,7 @@ export const useEditorStore = create<EditorStore>()(
             projects: replaceClips(s.projects, project.id, clips),
             selectedClipIds: duplicated.map(c => c.id),
             clipColorCorrections: { ...s.clipColorCorrections, ...ccPatch },
+            ...withUndo(s),
           }
         })
       },
@@ -576,6 +647,7 @@ export const useEditorStore = create<EditorStore>()(
             clipColorCorrections: firstCc
               ? { ...s.clipColorCorrections, [merged.id]: firstCc }
               : s.clipColorCorrections,
+            ...withUndo(s),
           }
         })
       },
@@ -590,9 +662,40 @@ export const useEditorStore = create<EditorStore>()(
             projects: replaceClips(s.projects, project.id, clips),
             selectedClipIds: [],
             playheadTime: Math.min(s.playheadTime, newDuration),
+            ...withUndo(s),
           }
         })
       },
+
+      pushUndo: () => {
+        const s = get()
+        set({
+          undoPast: [...s.undoPast.slice(-9), captureSnapshot(s)],
+          undoFuture: [],
+        })
+      },
+
+      undo: () => set(s => {
+        if (!s.undoPast.length) return s
+        const current = captureSnapshot(s)
+        const prev = s.undoPast[s.undoPast.length - 1]
+        return {
+          ...prev,
+          undoPast: s.undoPast.slice(0, -1),
+          undoFuture: [...s.undoFuture.slice(-9), current],
+        }
+      }),
+
+      redo: () => set(s => {
+        if (!s.undoFuture.length) return s
+        const current = captureSnapshot(s)
+        const next = s.undoFuture[s.undoFuture.length - 1]
+        return {
+          ...next,
+          undoPast: [...s.undoPast.slice(-9), current],
+          undoFuture: s.undoFuture.slice(0, -1),
+        }
+      }),
     }),
     {
       name: 'clipr-store',

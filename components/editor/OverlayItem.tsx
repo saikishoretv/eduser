@@ -14,6 +14,7 @@ export default function OverlayItem({ overlay, zoom, selected }: Props) {
   const updateOverlayLayer   = useEditorStore(s => s.updateOverlayLayer)
   const removeOverlayLayer   = useEditorStore(s => s.removeOverlayLayer)
   const setSelectedOverlayId = useEditorStore(s => s.setSelectedOverlayId)
+  const pushUndo             = useEditorStore(s => s.pushUndo)
 
   const bodyDragRef  = useRef<{ startX: number; startAt: number } | null>(null)
   const resizeDragRef = useRef<{ startX: number; duration: number } | null>(null)
@@ -24,6 +25,7 @@ export default function OverlayItem({ overlay, zoom, selected }: Props) {
 
   function handleBodyMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     bodyDragRef.current = { startX: e.clientX, startAt: overlay.startAt }
     const move = (ev: MouseEvent) => {
       if (!bodyDragRef.current) return
@@ -41,6 +43,7 @@ export default function OverlayItem({ overlay, zoom, selected }: Props) {
 
   function handleResizeMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
+    pushUndo()
     resizeDragRef.current = { startX: e.clientX, duration: overlay.duration }
     const move = (ev: MouseEvent) => {
       if (!resizeDragRef.current) return
