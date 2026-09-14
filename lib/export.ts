@@ -179,10 +179,12 @@ function buildSubEvents(
   const events: SubEvent[] = []
   for (const timing of timings) {
     const source = sources.find(s => s.id === timing.clip.sourceId)
-    if (!source?.transcript?.length) continue
+    // Use translated transcript when active, fall back to original
+    const transcript = source?.translatedTranscript ?? source?.transcript
+    if (!transcript?.length) continue
     const offset = timing.start - timing.clip.trimStart
 
-    for (const seg of source.transcript) {
+    for (const seg of transcript) {
       if (seg.end <= timing.clip.trimStart || seg.start >= timing.clip.trimEnd) continue
 
       if (style === 'standard') {
@@ -596,7 +598,7 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const pngArr = new Uint8Array(await pngBlob.arrayBuffer())
       const pngFile = `text_ol_${ol.id}.png`
       await ffmpeg.writeFile(pngFile, pngArr)
-      console.log(`[export] rendered text overlay "${text}" to ${pngFile} (${pngArr.length} bytes)`)
+      console.log(`[export] rendered text overlay "${ol.text}" to ${pngFile} (${pngArr.length} bytes)`)
 
       inputArgs.push('-loop', '1', '-i', pngFile)
       textOverlayInputIndices.push(inputIdx++)

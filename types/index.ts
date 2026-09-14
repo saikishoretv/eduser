@@ -17,6 +17,9 @@ export interface SourceVideo {
   duration: number
   objectUrl: string
   transcript?: TranscriptSegment[]
+  detectedLanguage?: string     // ISO 639-1 code returned by Whisper, e.g. 'en', 'hi', 'ta'
+  translationLanguage?: string  // display name of the language translated to, e.g. 'Hindi'
+  translatedTranscript?: TranscriptSegment[]
 }
 
 export interface Clip {

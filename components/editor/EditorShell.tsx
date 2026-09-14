@@ -3,12 +3,12 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
-import { extractAudioChunks } from '@/lib/audioUtils'
 import Preview from './Preview'
 import Toolbar from './Toolbar'
 import Timeline from './Timeline'
 import FormatSelector from './FormatSelector'
 import ExportPanel from './ExportPanel'
+import CCModal from './CCModal'
 
 interface Props {
   projectId: string
@@ -18,11 +18,12 @@ export default function EditorShell({ projectId }: Props) {
   const router = useRouter()
   const projects = useEditorStore(s => s.projects)
   const setActiveProject = useEditorStore(s => s.setActiveProject)
-  const setSourceTranscript = useEditorStore(s => s.setSourceTranscript)
+  const subtitleStyle    = useEditorStore(s => s.subtitleStyle)
+  const setSubtitleStyle = useEditorStore(s => s.setSubtitleStyle)
 
-  const [transcribing, setTranscribing] = useState(false)
-  const [transcribeError, setTranscribeError] = useState<string | null>(null)
-  const [showExport, setShowExport] = useState(false)
+  const [showCCModal,   setShowCCModal]   = useState(false)
+  const [showCCWarning, setShowCCWarning] = useState(false)
+  const [showExport,    setShowExport]    = useState(false)
 
   const project = projects.find(p => p.id === projectId)
 
@@ -96,50 +97,23 @@ export default function EditorShell({ projectId }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  const hasTranscript = project?.sources.some(s => s.transcript && s.transcript.length > 0)
+  const translationLanguage = project?.sources[0]?.translationLanguage ?? null
+  const hasTranscript       = project?.sources.some(s => s.transcript && s.transcript.length > 0)
 
-  async function handleTranscribe() {
-    if (!project) return
-    setTranscribing(true)
-    setTranscribeError(null)
-    try {
-      for (const source of project.sources) {
-        const chunks = await extractAudioChunks(source.objectUrl)
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const allSegments: any[] = []
-
-        for (const chunk of chunks) {
-          const form = new FormData()
-          form.append('audio', chunk.blob, 'audio.wav')
-          const res = await fetch('/api/transcribe', { method: 'POST', body: form })
-          if (!res.ok) {
-            const { error } = await res.json()
-            throw new Error(error ?? 'Transcription failed')
-          }
-          const { segments } = await res.json()
-          // Shift all timestamps by the chunk's start offset
-          for (const seg of segments) {
-            allSegments.push({
-              ...seg,
-              start: seg.start + chunk.offset,
-              end:   seg.end   + chunk.offset,
-              words: (seg.words ?? []).map((w: { word: string; start: number; end: number }) => ({
-                ...w,
-                start: w.start + chunk.offset,
-                end:   w.end   + chunk.offset,
-              })),
-            })
-          }
-        }
-
-        setSourceTranscript(source.id, allSegments)
-      }
-    } catch (err) {
-      setTranscribeError(err instanceof Error ? err.message : 'Unknown error')
-    } finally {
-      setTranscribing(false)
+  // Auto-downgrade highlight CC to standard when a translation becomes active
+  useEffect(() => {
+    if (translationLanguage && subtitleStyle === 'highlight') {
+      setSubtitleStyle('standard')
+      setShowCCWarning(true)
     }
-  }
+  }, [translationLanguage]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-dismiss CC warning after 5s
+  useEffect(() => {
+    if (!showCCWarning) return
+    const t = setTimeout(() => setShowCCWarning(false), 5000)
+    return () => clearTimeout(t)
+  }, [showCCWarning])
 
   if (!project) return null
 
@@ -158,28 +132,20 @@ export default function EditorShell({ projectId }: Props) {
         <div className="ml-auto flex items-center gap-3">
           <FormatSelector />
 
-          {/* Transcribe */}
+          {/* CC button */}
           <div className="flex flex-col items-end">
             <button
-              onClick={handleTranscribe}
-              disabled={transcribing}
-              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                transcribing
-                  ? 'border-neutral-700 text-neutral-500 cursor-not-allowed'
-                  : hasTranscript
+              onClick={() => setShowCCModal(true)}
+              className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
+                hasTranscript
                   ? 'border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-white'
                   : 'border-blue-700 text-blue-400 hover:border-blue-500 hover:text-blue-300'
               }`}
             >
-              {transcribing ? (
-                <>
-                  <span className="w-3 h-3 border border-neutral-500 border-t-neutral-300 rounded-full animate-spin" />
-                  Transcribing…
-                </>
-              ) : hasTranscript ? 'Re-transcribe' : 'Transcribe'}
+              {hasTranscript ? 'Edit CC' : 'Add CC'}
             </button>
-            {transcribeError && (
-              <span className="text-[10px] text-red-400 mt-0.5">{transcribeError}</span>
+            {hasTranscript && translationLanguage && (
+              <span className="text-[10px] text-violet-400 mt-0.5">→ {translationLanguage}</span>
             )}
           </div>
 
@@ -194,6 +160,21 @@ export default function EditorShell({ projectId }: Props) {
         </div>
       </header>
 
+      {/* CC downgrade warning */}
+      {showCCWarning && (
+        <div className="flex items-center justify-between gap-3 px-4 py-2 bg-amber-950 border-b border-amber-800 shrink-0">
+          <span className="text-xs text-amber-300">
+            Word highlight CC is not available for translations — switched to Standard CC.
+          </span>
+          <button
+            onClick={() => setShowCCWarning(false)}
+            className="text-amber-600 hover:text-amber-300 text-sm leading-none shrink-0 transition-colors"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Preview */}
       <div className="flex-1 min-h-0">
         <Preview />
@@ -207,7 +188,8 @@ export default function EditorShell({ projectId }: Props) {
         <Timeline />
       </div>
 
-      {showExport && <ExportPanel onClose={() => setShowExport(false)} />}
+      {showExport  && <ExportPanel onClose={() => setShowExport(false)} />}
+      {showCCModal && <CCModal project={project} onClose={() => setShowCCModal(false)} />}
     </div>
   )
 }

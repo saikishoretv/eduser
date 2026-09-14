@@ -26,6 +26,10 @@ export default function CCSelector() {
   const setAppearance         = useEditorStore(s => s.setSubtitleAppearance)
   const standardAppearance    = useEditorStore(s => s.standardSubtitleAppearance)
   const setStandardAppearance = useEditorStore(s => s.setStandardSubtitleAppearance)
+  const isTranslationActive   = useEditorStore(s => {
+    const project = s.projects.find(p => p.id === s.activeProjectId)
+    return !!(project?.sources[0]?.translationLanguage)
+  })
 
   useEffect(() => {
     if (!open) return
@@ -76,20 +80,32 @@ export default function CCSelector() {
 
           {/* Mode tabs */}
           <div className="flex border-b border-neutral-800">
-            {MODES.map(({ key, label }) => (
-              <button
-                key={key}
-                onClick={() => setSubtitleStyle(key)}
-                className={`flex-1 py-2 text-[11px] font-medium transition-colors ${
-                  subtitleStyle === key
-                    ? 'bg-neutral-800 text-white'
-                    : 'text-neutral-500 hover:text-neutral-300'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+            {MODES.map(({ key, label }) => {
+              const disabled = key === 'highlight' && isTranslationActive
+              return (
+                <button
+                  key={key}
+                  onClick={() => !disabled && setSubtitleStyle(key)}
+                  disabled={disabled}
+                  title={disabled ? 'Word highlight unavailable for translations' : undefined}
+                  className={`flex-1 py-2 text-[11px] font-medium transition-colors ${
+                    disabled
+                      ? 'text-neutral-700 cursor-not-allowed'
+                      : subtitleStyle === key
+                      ? 'bg-neutral-800 text-white'
+                      : 'text-neutral-500 hover:text-neutral-300'
+                  }`}
+                >
+                  {label}
+                </button>
+              )
+            })}
           </div>
+          {isTranslationActive && (
+            <p className="px-3 pt-2 pb-0 text-[10px] text-amber-500/80">
+              Word highlight unavailable for translations
+            </p>
+          )}
 
           {subtitleStyle === 'off' && (
             <p className="px-4 py-4 text-xs text-neutral-500 text-center">Subtitles are hidden</p>

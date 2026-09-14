@@ -159,10 +159,12 @@ export default function Preview() {
   const currentSourceTime = activeTiming
     ? activeTiming.clip.trimStart + ((previewTime ?? playheadTime) - activeTiming.start)
     : 0
-  const activeSegment = activeSource?.transcript?.find(
+  // Use translated transcript when active, fall back to original
+  const activeTranscript = activeSource?.translatedTranscript ?? activeSource?.transcript
+  const activeSegment = activeTranscript?.find(
     seg => currentSourceTime >= seg.start && currentSourceTime < seg.end
   ) ?? null
-  const hasTranscript = !!activeSource?.transcript?.length
+  const hasTranscript = !!(activeSource?.transcript?.length)
 
   // For highlight mode: find current word and build a 4-word display window
   const words = activeSegment?.words ?? []

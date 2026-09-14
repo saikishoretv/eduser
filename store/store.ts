@@ -52,7 +52,9 @@ interface EditorStore {
   createProject: (name: string, source: SourceVideo) => string
   deleteProject: (id: string) => void
   setActiveProject: (id: string) => void
-  setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[]) => void
+  setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[], detectedLanguage?: string) => void
+  setSourceTranslation: (sourceId: string, language: string, segments: TranscriptSegment[]) => void
+  clearSourceTranslation: (sourceId: string) => void
 
   selectClip: (id: string, addToSelection: boolean) => void
   clearSelection: () => void
@@ -200,10 +202,36 @@ export const useEditorStore = create<EditorStore>()(
         set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, playheadTime: 0, isPlaying: false })
       },
 
-      setSourceTranscript: (sourceId, transcript) => set(s => ({
+      setSourceTranscript: (sourceId, transcript, detectedLanguage) => set(s => ({
         projects: s.projects.map(p => ({
           ...p,
-          sources: p.sources.map(src => src.id === sourceId ? { ...src, transcript } : src),
+          sources: p.sources.map(src =>
+            src.id === sourceId
+              ? { ...src, transcript, ...(detectedLanguage ? { detectedLanguage } : {}) }
+              : src
+          ),
+        })),
+      })),
+
+      setSourceTranslation: (sourceId, language, segments) => set(s => ({
+        projects: s.projects.map(p => ({
+          ...p,
+          sources: p.sources.map(src =>
+            src.id === sourceId
+              ? { ...src, translationLanguage: language, translatedTranscript: segments }
+              : src
+          ),
+        })),
+      })),
+
+      clearSourceTranslation: (sourceId) => set(s => ({
+        projects: s.projects.map(p => ({
+          ...p,
+          sources: p.sources.map(src =>
+            src.id === sourceId
+              ? { ...src, translationLanguage: undefined, translatedTranscript: undefined }
+              : src
+          ),
         })),
       })),
 
