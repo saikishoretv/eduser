@@ -1,5 +1,4 @@
-import { FFmpeg } from '@ffmpeg/ffmpeg'
-import { fetchFile, toBlobURL } from '@ffmpeg/util'
+import type { FFmpeg as FFmpegType } from '@ffmpeg/ffmpeg'
 import { Clip, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
 import { FormatPreset } from '@/lib/formats'
 import { SubtitleStyle, TransitionType } from '@/store/store'
@@ -26,10 +25,15 @@ export interface ExportOptions {
   onProgress: (ratio: number) => void
 }
 
-let ffmpegInstance: FFmpeg | null = null
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let ffmpegInstance: any | null = null
 
-async function getFFmpeg(): Promise<FFmpeg> {
+async function getFFmpeg(): Promise<FFmpegType> {
   if (ffmpegInstance) return ffmpegInstance
+  // Dynamic imports prevent Turbopack from bundling @ffmpeg/* and mangling
+  // their internal dynamic import(variable) calls at build time.
+  const { FFmpeg }             = await import('@ffmpeg/ffmpeg')
+  const { toBlobURL }          = await import('@ffmpeg/util')
   const ffmpeg = new FFmpeg()
 
   const isMT = typeof SharedArrayBuffer !== 'undefined'
@@ -397,7 +401,9 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     standardSubtitleAppearance, onProgress,
   } = opts
 
-  let ffmpeg: FFmpeg
+  const { fetchFile } = await import('@ffmpeg/util')
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let ffmpeg: any
   try {
     ffmpeg = await getFFmpeg()
   } catch (err) {
