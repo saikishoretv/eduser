@@ -32,8 +32,9 @@ async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance) return ffmpegInstance
   const ffmpeg = new FFmpeg()
   await ffmpeg.load({
-    coreURL: await toBlobURL('/ffmpeg-core.js', 'text/javascript'),
-    wasmURL: await toBlobURL('/ffmpeg-core.wasm', 'application/wasm'),
+    coreURL:   await toBlobURL('/ffmpeg-core.js',        'text/javascript'),
+    wasmURL:   await toBlobURL('/ffmpeg-core.wasm',      'application/wasm'),
+    workerURL: await toBlobURL('/ffmpeg-core.worker.js', 'text/javascript'),
   })
   ffmpegInstance = ffmpeg
   return ffmpeg
