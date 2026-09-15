@@ -31,11 +31,21 @@ let ffmpegInstance: FFmpeg | null = null
 async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpegInstance) return ffmpegInstance
   const ffmpeg = new FFmpeg()
-  await ffmpeg.load({
-    coreURL:   await toBlobURL('/ffmpeg-core.js',        'text/javascript'),
-    wasmURL:   await toBlobURL('/ffmpeg-core.wasm',      'application/wasm'),
-    workerURL: await toBlobURL('/ffmpeg-core.worker.js', 'text/javascript'),
-  })
+
+  const isMT = typeof SharedArrayBuffer !== 'undefined'
+  if (isMT) {
+    await ffmpeg.load({
+      coreURL:   await toBlobURL('/ffmpeg-core.js',        'text/javascript'),
+      wasmURL:   await toBlobURL('/ffmpeg-core.wasm',      'application/wasm'),
+      workerURL: await toBlobURL('/ffmpeg-core.worker.js', 'text/javascript'),
+    })
+  } else {
+    await ffmpeg.load({
+      coreURL: await toBlobURL('/ffmpeg-core-st.js',   'text/javascript'),
+      wasmURL: await toBlobURL('/ffmpeg-core-st.wasm', 'application/wasm'),
+    })
+  }
+
   ffmpegInstance = ffmpeg
   return ffmpeg
 }
