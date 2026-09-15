@@ -6,7 +6,7 @@ import { useEditorStore } from '@/store/store'
 import { SourceVideo } from '@/types'
 import { getSupabase } from '@/lib/supabase'
 import { saveBlob } from '@/lib/db'
-import type { User } from '@supabase/supabase-js'
+import type { User, Session, AuthChangeEvent } from '@supabase/supabase-js'
 
 function formatDuration(seconds: number): string {
   if (!isFinite(seconds)) return '0:00'
@@ -39,8 +39,8 @@ export default function ListingPage() {
   const deleteProject = useEditorStore(s => s.deleteProject)
 
   useEffect(() => {
-    getSupabase().auth.getSession().then(({ data }) => setUser(data.session?.user ?? null))
-    const { data: { subscription } } = getSupabase().auth.onAuthStateChange((_, session) => {
+    getSupabase().auth.getSession().then(res => setUser(res.data.session?.user ?? null))
+    const { data: { subscription } } = getSupabase().auth.onAuthStateChange((_: AuthChangeEvent, session: Session | null) => {
       setUser(session?.user ?? null)
     })
     return () => subscription.unsubscribe()

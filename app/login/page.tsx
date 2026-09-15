@@ -18,8 +18,8 @@ export default function LoginPage() {
 
   // Already signed in → skip the page
   useEffect(() => {
-    getSupabase().auth.getSession().then(({ data }) => {
-      if (data.session) router.replace('/')
+    getSupabase().auth.getSession().then(res => {
+      if (res.data.session) router.replace('/')
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
