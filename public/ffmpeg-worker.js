@@ -27,18 +27,42 @@ const ERROR_IMPORT_FAILURE       = new Error('failed to import ffmpeg-core.js')
 
 let ffmpeg
 
+// Surface any unhandled rejections as console errors so they're visible in DevTools
+self.addEventListener('unhandledrejection', e => {
+  console.error('[ffmpeg-worker] Unhandled rejection:', e.reason)
+})
+
 const load = async ({ coreURL, wasmURL, workerURL }) => {
   const first = !ffmpeg
+  console.log('[ffmpeg-worker] LOAD start', { coreURL, wasmURL, workerURL, crossOriginIsolated })
+
   // Module worker — use dynamic import() directly
-  self.createFFmpegCore = (await import(/* @vite-ignore */ coreURL)).default
+  console.log('[ffmpeg-worker] importing core…')
+  const mod = await import(/* @vite-ignore */ coreURL)
+  self.createFFmpegCore = mod.default ?? mod
   if (!self.createFFmpegCore) throw ERROR_IMPORT_FAILURE
+  console.log('[ffmpeg-worker] core imported OK')
 
   const resolvedWasmURL   = wasmURL   ?? coreURL.replace(/\.js$/, '.wasm')
   const resolvedWorkerURL = workerURL ?? coreURL.replace(/\.js$/, '.worker.js')
 
-  ffmpeg = await self.createFFmpegCore({
-    mainScriptUrlOrBlob: `${coreURL}#${btoa(JSON.stringify({ wasmURL: resolvedWasmURL, workerURL: resolvedWorkerURL }))}`,
-  })
+  // Both @ffmpeg/core and @ffmpeg/core-mt override Module.locateFile with _locateFile,
+  // which parses the base64-encoded JSON in the URL hash to find wasmURL / workerURL.
+  const mainScriptUrlOrBlob = `${coreURL}#${btoa(JSON.stringify({ wasmURL: resolvedWasmURL, workerURL: resolvedWorkerURL }))}`
+
+  // Timeout so a silent WASM-init hang surfaces as an error instead of forever blocking
+  const TIMEOUT_MS = 90_000
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`createFFmpegCore timed out after ${TIMEOUT_MS / 1000}s — check WASM download and SharedArrayBuffer availability`)), TIMEOUT_MS)
+  )
+
+  console.log('[ffmpeg-worker] calling createFFmpegCore…')
+  ffmpeg = await Promise.race([
+    self.createFFmpegCore({ mainScriptUrlOrBlob }),
+    timeout,
+  ])
+  console.log('[ffmpeg-worker] createFFmpegCore resolved')
+
   ffmpeg.setLogger(  data => self.postMessage({ type: FFMessageType.LOG,      data }))
   ffmpeg.setProgress(data => self.postMessage({ type: FFMessageType.PROGRESS, data }))
   return first
