@@ -46,10 +46,10 @@ async function toBlobURL(url: string, mimeType: string): Promise<string> {
 }
 
 async function fetchFile(input: string | File | Blob): Promise<Uint8Array> {
-  if (typeof input === 'string') {
-    return new Uint8Array(await fetch(input).then(r => r.arrayBuffer()))
-  }
-  return new Uint8Array(await input.arrayBuffer())
+  const buf: ArrayBuffer = typeof input === 'string'
+    ? await fetch(input).then(r => r.arrayBuffer())
+    : await input.arrayBuffer()
+  return new Uint8Array(buf)
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
