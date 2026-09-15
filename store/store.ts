@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware'
 import { Clip, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
 import { getClipTimings, getTotalDuration, canMerge, getSelectedIndices } from '@/lib/clipUtils'
 import { FormatPreset } from '@/lib/formats'
-import { saveBlob, deleteBlob } from '@/lib/db'
+import { deleteBlob } from '@/lib/db'
 import { SubtitleAppearance, SUBTITLE_DEFAULT, StandardSubtitleAppearance, STANDARD_SUBTITLE_DEFAULT } from '@/lib/subtitleTemplates'
 import { ColorCorrection, COLOR_CORRECTION_DEFAULT } from '@/lib/colorPresets'
 
@@ -51,7 +51,9 @@ interface EditorStore {
 
   createProject: (name: string, source: SourceVideo) => string
   deleteProject: (id: string) => void
+  hydrateProject: (project: Project) => void
   setActiveProject: (id: string) => void
+  setSourceObjectUrl: (sourceId: string, objectUrl: string) => void
   setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[], detectedLanguage?: string) => void
   setSourceTranslation: (sourceId: string, language: string, segments: TranscriptSegment[]) => void
   clearSourceTranslation: (sourceId: string) => void
@@ -179,18 +181,21 @@ export const useEditorStore = create<EditorStore>()(
         const clip: Clip = { id: uid(), sourceId: source.id, name: source.name, trimStart: 0, trimEnd: source.duration }
         const project: Project = { id, name, createdAt: Date.now(), clips: [clip], sources: [source], audioLayers: [], overlayLayers: [] }
         set(s => ({ projects: [...s.projects, project] }))
-        // Persist blob to IndexedDB (fire-and-forget)
-        fetch(source.objectUrl)
-          .then(r => r.blob())
-          .then(blob => saveBlob(source.id, blob))
-          .catch(console.error)
         return id
       },
+
+      hydrateProject: (project) => set(s => ({
+        projects: s.projects.some(p => p.id === project.id)
+          ? s.projects.map(p => p.id === project.id ? project : p)
+          : [...s.projects, project],
+      })),
 
       deleteProject: (id) => {
         const project = get().projects.find(p => p.id === id)
         if (project) {
           project.sources.forEach(s => deleteBlob(s.id).catch(() => {}))
+          project.audioLayers?.forEach(al => deleteBlob(al.blobId ?? al.id).catch(() => {}))
+          project.overlayLayers?.forEach(ol => { if (ol.blobId) deleteBlob(ol.blobId).catch(() => {}) })
         }
         set(s => ({
           projects: s.projects.filter(p => p.id !== id),
@@ -201,6 +206,15 @@ export const useEditorStore = create<EditorStore>()(
       setActiveProject: (id) => {
         set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, playheadTime: 0, isPlaying: false })
       },
+
+      setSourceObjectUrl: (sourceId, objectUrl) => set(s => ({
+        projects: s.projects.map(p => ({
+          ...p,
+          sources: p.sources.map(src =>
+            src.id === sourceId ? { ...src, objectUrl } : src
+          ),
+        })),
+      })),
 
       setSourceTranscript: (sourceId, transcript, detectedLanguage) => set(s => ({
         projects: s.projects.map(p => ({

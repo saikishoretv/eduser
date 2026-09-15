@@ -45,11 +45,17 @@ ${numbered}`,
   const raw = message.content[0].type === 'text' ? message.content[0].text : ''
 
   // Parse numbered lines back into translated texts
-  const lines = raw.split('\n').filter(l => /^\d+\./.test(l.trim()))
-  const translatedTexts = lines.map(l => l.replace(/^\d+\.\s*/, '').trim())
+  // Build a map by number to tolerate reordering or extra blank lines from Claude
+  const lineMap = new Map<number, string>()
+  for (const line of raw.split('\n')) {
+    const m = line.trim().match(/^(\d+)\.\s*(.+)/)
+    if (m) lineMap.set(parseInt(m[1], 10), m[2].trim())
+  }
 
-  if (translatedTexts.length !== segments.length) {
-    return Response.json({ error: 'Translation response length mismatch' }, { status: 500 })
+  const translatedTexts = segments.map((_, i) => lineMap.get(i + 1) ?? '')
+  const missing = translatedTexts.filter(t => !t).length
+  if (missing > 0) {
+    return Response.json({ error: `Translation incomplete: ${missing} segment(s) missing` }, { status: 500 })
   }
 
   // Return segments with translated text, original timing, and no word timestamps

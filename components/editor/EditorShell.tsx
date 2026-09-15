@@ -9,6 +9,8 @@ import Timeline from './Timeline'
 import FormatSelector from './FormatSelector'
 import ExportPanel from './ExportPanel'
 import CCModal from './CCModal'
+import { useSourceCache } from '@/lib/useSourceCache'
+import { useAutoSave } from '@/lib/useAutoSave'
 
 interface Props {
   projectId: string
@@ -17,23 +19,44 @@ interface Props {
 export default function EditorShell({ projectId }: Props) {
   const router = useRouter()
   const projects = useEditorStore(s => s.projects)
-  const setActiveProject = useEditorStore(s => s.setActiveProject)
+  const setActiveProject  = useEditorStore(s => s.setActiveProject)
+  const hydrateProject    = useEditorStore(s => s.hydrateProject)
   const subtitleStyle    = useEditorStore(s => s.subtitleStyle)
   const setSubtitleStyle = useEditorStore(s => s.setSubtitleStyle)
 
   const [showCCModal,   setShowCCModal]   = useState(false)
   const [showCCWarning, setShowCCWarning] = useState(false)
   const [showExport,    setShowExport]    = useState(false)
+  const [hydrating,     setHydrating]     = useState(false)
 
   const project = projects.find(p => p.id === projectId)
 
   useEffect(() => {
-    if (!project) {
-      router.replace('/')
+    if (project) {
+      setActiveProject(projectId)
       return
     }
-    setActiveProject(projectId)
+    // Project not in local store — fetch full metadata from DB
+    setHydrating(true)
+    fetch(`/api/projects/${projectId}`)
+      .then(r => r.ok ? r.json() : null)
+      .then(data => {
+        if (data?.project) {
+          hydrateProject(data.project)
+          setActiveProject(projectId)
+        } else {
+          router.replace('/')
+        }
+      })
+      .catch(() => router.replace('/'))
+      .finally(() => setHydrating(false))
   }, [projectId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Resolve source objectUrls from IndexedDB or S3 after a page reload
+  useSourceCache(project)
+
+  // Debounce auto-save: 2s after last change → PATCH /api/projects/[id]
+  useAutoSave(project ? projectId : null)
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -115,7 +138,13 @@ export default function EditorShell({ projectId }: Props) {
     return () => clearTimeout(t)
   }, [showCCWarning])
 
-  if (!project) return null
+  if (!project) {
+    return hydrating ? (
+      <div className="flex h-screen items-center justify-center bg-neutral-950">
+        <span className="text-sm text-neutral-500">Loading project…</span>
+      </div>
+    ) : null
+  }
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 overflow-hidden">

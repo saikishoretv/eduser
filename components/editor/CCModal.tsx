@@ -133,7 +133,7 @@ export default function CCModal({ project, onClose }: Props) {
     <>
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
-      onClick={onClose}
+      onClick={busy ? undefined : onClose}
     >
       <div
         className="bg-neutral-900 border border-neutral-700 rounded-2xl shadow-2xl w-96 p-5 flex flex-col gap-4"
@@ -146,8 +146,9 @@ export default function CCModal({ project, onClose }: Props) {
           </h2>
           <button
             onClick={onClose}
+            disabled={busy}
             aria-label="Close"
-            className="text-neutral-500 hover:text-white transition-colors text-lg leading-none"
+            className="text-neutral-500 hover:text-white transition-colors text-lg leading-none disabled:opacity-30 disabled:cursor-not-allowed"
           >
             ×
           </button>

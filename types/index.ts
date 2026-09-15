@@ -16,6 +16,7 @@ export interface SourceVideo {
   name: string
   duration: number
   objectUrl: string
+  s3Key?: string                // set after upload; used by the DB save (T8) and cache miss handler (T6)
   transcript?: TranscriptSegment[]
   detectedLanguage?: string     // ISO 639-1 code returned by Whisper, e.g. 'en', 'hi', 'ta'
   translationLanguage?: string  // display name of the language translated to, e.g. 'Hindi'
