@@ -40,11 +40,6 @@ function loadScript(src: string): Promise<void> {
   })
 }
 
-async function toBlobURL(url: string, mimeType: string): Promise<string> {
-  const buf = await fetch(url).then(r => r.arrayBuffer())
-  return URL.createObjectURL(new Blob([buf], { type: mimeType }))
-}
-
 async function fetchFile(input: string | File | Blob): Promise<Uint8Array> {
   const buf: ArrayBuffer = typeof input === 'string'
     ? await fetch(input).then(r => r.arrayBuffer())
@@ -60,17 +55,21 @@ async function getFFmpeg(): Promise<any> {
   const { FFmpeg } = (window as any).FFmpegWASM
   const ffmpeg = new FFmpeg()
 
+  // Use absolute URLs — the webpack runtime inside 814.ffmpeg.js can't load
+  // blob: URLs (it doesn't recognise them as chunk IDs), but same-origin
+  // absolute URLs fall through to native fetch/import correctly.
+  const base = window.location.origin
   const isMT = typeof SharedArrayBuffer !== 'undefined'
   if (isMT) {
     await ffmpeg.load({
-      coreURL:   await toBlobURL('/ffmpeg-core.js',        'text/javascript'),
-      wasmURL:   await toBlobURL('/ffmpeg-core.wasm',      'application/wasm'),
-      workerURL: await toBlobURL('/ffmpeg-core.worker.js', 'text/javascript'),
+      coreURL:   `${base}/ffmpeg-core.js`,
+      wasmURL:   `${base}/ffmpeg-core.wasm`,
+      workerURL: `${base}/ffmpeg-core.worker.js`,
     })
   } else {
     await ffmpeg.load({
-      coreURL: await toBlobURL('/ffmpeg-core-st.js',   'text/javascript'),
-      wasmURL: await toBlobURL('/ffmpeg-core-st.wasm', 'application/wasm'),
+      coreURL: `${base}/ffmpeg-core-st.js`,
+      wasmURL: `${base}/ffmpeg-core-st.wasm`,
     })
   }
 
