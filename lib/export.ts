@@ -427,6 +427,7 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     throw new Error(`Failed to load FFmpeg: ${err instanceof Error ? err.message : err}`)
   }
   console.log('[export] FFmpeg loaded')
+  onProgress(0) // transition UI from "Loading FFmpeg…" → "Exporting…"
 
   const progressHandler = ({ progress }: { progress: number }) => onProgress(Math.max(0, Math.min(1, progress)))
   const logHandler = ({ message }: { message: string }) => console.log('[ffmpeg]', message)
@@ -643,15 +644,47 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     const STRIP_H = subtitleStyle === 'highlight'
       ? Math.round(outH * 0.10)
       : Math.round(outH * 0.18)
-    const subEventInputIndices: number[] = []
+
+    // Step 1: render all subtitle PNGs to the virtual FS (same as before)
     for (let si = 0; si < subEvents.length; si++) {
       const pngData = await renderSubEvent(subEvents[si], outW, outH, STRIP_H, subtitleStyle as 'standard' | 'highlight', standardSubtitleAppearance, subtitleAppearance)
-      const pngFile = `sub_${si}.png`
-      await ffmpeg.writeFile(pngFile, pngData)
-      inputArgs.push('-loop', '1', '-i', pngFile)
-      subEventInputIndices.push(inputIdx++)
+      await ffmpeg.writeFile(`sub_${si}.png`, pngData)
     }
     if (subEvents.length) console.log(`[export] wrote ${subEvents.length} subtitle strip PNGs (${STRIP_H}px tall)`)
+
+    // Step 2: build a single subtitle track using the concat demuxer approach.
+    // Instead of N separate overlay filter nodes (O(N) per frame), we create ONE
+    // concatenated subtitle stream and use a SINGLE overlay — O(1) per frame.
+    const subConcatLabels: string[] = []
+    if (subEvents.length > 0) {
+      // Transparent blank frame used during gaps between subtitle events
+      const blankCanvas = document.createElement('canvas')
+      blankCanvas.width = outW
+      blankCanvas.height = STRIP_H
+      const blankBlob = await new Promise<Blob>(resolve => blankCanvas.toBlob(b => resolve(b!), 'image/png'))
+      await ffmpeg.writeFile('sub_blank.png', new Uint8Array(await blankBlob.arrayBuffer()))
+
+      let prevEnd = 0
+      for (let si = 0; si < subEvents.length; si++) {
+        const ev = subEvents[si]
+        // Gap before this event (if any)
+        const gapDur = ev.startAt - prevEnd
+        if (gapDur > 0.001) {
+          inputArgs.push('-t', gapDur.toFixed(3), '-loop', '1', '-i', 'sub_blank.png')
+          subConcatLabels.push(`[${inputIdx++}:v]`)
+        }
+        // This subtitle event
+        inputArgs.push('-t', (ev.endAt - ev.startAt).toFixed(3), '-loop', '1', '-i', `sub_${si}.png`)
+        subConcatLabels.push(`[${inputIdx++}:v]`)
+        prevEnd = ev.endAt
+      }
+      // Gap after the last event
+      const tailGap = totalDuration - prevEnd
+      if (tailGap > 0.001) {
+        inputArgs.push('-t', tailGap.toFixed(3), '-loop', '1', '-i', 'sub_blank.png')
+        subConcatLabels.push(`[${inputIdx++}:v]`)
+      }
+    }
 
     const finalVideoLabels: string[] = []
 
@@ -714,16 +747,14 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     // Chain overlays: thread a current video label through subtitles → image overlays → text overlays
     let currentV = '[concatv]'
 
-    // Subtitle overlays (canvas-rendered strips positioned at bottom of frame)
-    subEvents.forEach((ev, si) => {
-      const imgIdx = subEventInputIndices[si]
-      const outLabel = `[sv${si}]`
-      const t0 = ev.startAt.toFixed(3)
-      const t1 = ev.endAt.toFixed(3)
+    // Subtitle overlay — one concat filter creates the subtitle track, then ONE overlay
+    // composites it onto the video. Replaces the old O(N) chain of N separate overlay nodes.
+    if (subConcatLabels.length > 0) {
+      filterParts.push(`${subConcatLabels.join('')}concat=n=${subConcatLabels.length}:v=1:a=0[subtitle_track]`)
       const stripY = outH - STRIP_H
-      filterParts.push(`${currentV}[${imgIdx}:v]overlay=format=auto:x=0:y=${stripY}:enable='between(t,${t0},${t1})'${outLabel}`)
-      currentV = outLabel
-    })
+      filterParts.push(`${currentV}[subtitle_track]overlay=format=auto:x=0:y=${stripY}[sub_composed]`)
+      currentV = '[sub_composed]'
+    }
 
     // Image overlays
     imageOverlays.forEach((ol, i) => {
@@ -791,6 +822,7 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     for (let si = 0; si < subEvents.length; si++) {
       await ffmpeg.deleteFile(`sub_${si}.png`).catch(() => {})
     }
+    await ffmpeg.deleteFile('sub_blank.png').catch(() => {})
     for (const layer of validAudioLayers) {
       const ext = layer.fileName.split('.').pop() ?? 'mp3'
       await ffmpeg.deleteFile(`audio_${layer.id}.${ext}`).catch(() => {})
