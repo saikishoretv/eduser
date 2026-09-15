@@ -1,6 +1,5 @@
-// @ffmpeg/ffmpeg and @ffmpeg/util are loaded at runtime via UMD script tags
-// (public/ffmpeg.js + public/ffmpeg-util.js) to avoid Turbopack/webpack
-// mangling their internal `new Worker(new URL(..., import.meta.url))` calls.
+// @ffmpeg/ffmpeg is loaded at runtime via UMD script tag (public/ffmpeg.js)
+// to avoid Turbopack/webpack mangling its `new Worker(new URL(..., import.meta.url))` call.
 import { Clip, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
 import { FormatPreset } from '@/lib/formats'
 import { SubtitleStyle, TransitionType } from '@/store/store'
@@ -41,14 +40,24 @@ function loadScript(src: string): Promise<void> {
   })
 }
 
+async function toBlobURL(url: string, mimeType: string): Promise<string> {
+  const buf = await fetch(url).then(r => r.arrayBuffer())
+  return URL.createObjectURL(new Blob([buf], { type: mimeType }))
+}
+
+async function fetchFile(input: string | File | Blob): Promise<Uint8Array> {
+  if (typeof input === 'string') {
+    return new Uint8Array(await fetch(input).then(r => r.arrayBuffer()))
+  }
+  return new Uint8Array(await input.arrayBuffer())
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getFFmpeg(): Promise<any> {
   if (ffmpegInstance) return ffmpegInstance
-  await Promise.all([loadScript('/ffmpeg.js'), loadScript('/ffmpeg-util.js')])
+  await loadScript('/ffmpeg.js')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const w = window as any
-  const { FFmpeg }    = w.FFmpegWASM
-  const { toBlobURL } = w.FFmpegUtil
+  const { FFmpeg } = (window as any).FFmpegWASM
   const ffmpeg = new FFmpeg()
 
   const isMT = typeof SharedArrayBuffer !== 'undefined'
@@ -424,8 +433,6 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     resetFFmpeg()
     throw new Error(`Failed to load FFmpeg: ${err instanceof Error ? err.message : err}`)
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const { fetchFile } = (window as any).FFmpegUtil
   console.log('[export] FFmpeg loaded')
 
   const progressHandler = ({ progress }: { progress: number }) => onProgress(Math.max(0, Math.min(1, progress)))
