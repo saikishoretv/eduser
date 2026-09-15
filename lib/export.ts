@@ -55,15 +55,14 @@ async function getFFmpeg(): Promise<any> {
   const { FFmpeg } = (window as any).FFmpegWASM
   const ffmpeg = new FFmpeg()
 
-  // classWorkerURL uses our standalone module worker (public/ffmpeg-worker.js)
-  // instead of the webpack-bundled 814.ffmpeg.js, which can't dynamically
-  // import external URLs (its webpack runtime only knows bundled chunk IDs).
+  // public/814.ffmpeg.js is our custom replacement for @ffmpeg/ffmpeg's
+  // webpack-bundled worker. The UMD loads it automatically by path.
+  // It uses native import() (not webpack's broken stub) to load the core.
   const base = window.location.origin
   const isMT = typeof SharedArrayBuffer !== 'undefined'
   await ffmpeg.load({
-    classWorkerURL: `${base}/ffmpeg-worker.js`,
-    coreURL:   `${base}/${isMT ? 'ffmpeg-core.js'    : 'ffmpeg-core-st.js'}`,
-    wasmURL:   `${base}/${isMT ? 'ffmpeg-core.wasm'  : 'ffmpeg-core-st.wasm'}`,
+    coreURL:   `${base}/${isMT ? 'ffmpeg-core.js'   : 'ffmpeg-core-st.js'}`,
+    wasmURL:   `${base}/${isMT ? 'ffmpeg-core.wasm' : 'ffmpeg-core-st.wasm'}`,
     ...(isMT ? { workerURL: `${base}/ffmpeg-core.worker.js` } : {}),
   })
 
