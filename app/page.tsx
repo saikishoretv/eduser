@@ -39,7 +39,7 @@ export default function ListingPage() {
   const deleteProject = useEditorStore(s => s.deleteProject)
 
   useEffect(() => {
-    getSupabase().auth.getSession().then(res => setUser(res.data.session?.user ?? null))
+    getSupabase().auth.getSession().then((res: { data: { session: Session | null } }) => setUser(res.data.session?.user ?? null))
     const { data: { subscription } } = getSupabase().auth.onAuthStateChange((_: AuthChangeEvent, session: Session | null) => {
       setUser(session?.user ?? null)
     })

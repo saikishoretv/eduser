@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { getSupabase } from '@/lib/supabase'
+import type { Session } from '@supabase/supabase-js'
 
 type Tab = 'signin' | 'signup'
 
@@ -18,7 +19,7 @@ export default function LoginPage() {
 
   // Already signed in → skip the page
   useEffect(() => {
-    getSupabase().auth.getSession().then(res => {
+    getSupabase().auth.getSession().then((res: { data: { session: Session | null } }) => {
       if (res.data.session) router.replace('/')
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
