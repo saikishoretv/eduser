@@ -4,7 +4,7 @@ import { useRef, useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import { SourceVideo } from '@/types'
-import { supabase } from '@/lib/supabase'
+import { getSupabase } from '@/lib/supabase'
 import { saveBlob } from '@/lib/db'
 import type { User } from '@supabase/supabase-js'
 
@@ -39,8 +39,8 @@ export default function ListingPage() {
   const deleteProject = useEditorStore(s => s.deleteProject)
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setUser(data.session?.user ?? null))
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_, session) => {
+    getSupabase().auth.getSession().then(({ data }) => setUser(data.session?.user ?? null))
+    const { data: { subscription } } = getSupabase().auth.onAuthStateChange((_, session) => {
       setUser(session?.user ?? null)
     })
     return () => subscription.unsubscribe()
@@ -56,7 +56,7 @@ export default function ListingPage() {
   }, [])
 
   async function handleSignOut() {
-    await supabase.auth.signOut()
+    await getSupabase().auth.signOut()
     router.push('/login')
   }
 

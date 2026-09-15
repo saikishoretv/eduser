@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { supabase } from '@/lib/supabase'
+import { getSupabase } from '@/lib/supabase'
 
 type Tab = 'signin' | 'signup'
 
@@ -18,7 +18,7 @@ export default function LoginPage() {
 
   // Already signed in → skip the page
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
+    getSupabase().auth.getSession().then(({ data }) => {
       if (data.session) router.replace('/')
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
@@ -35,11 +35,11 @@ export default function LoginPage() {
     setLoading(true)
 
     if (tab === 'signin') {
-      const { error: err } = await supabase.auth.signInWithPassword({ email, password })
+      const { error: err } = await getSupabase().auth.signInWithPassword({ email, password })
       if (err) { setError(err.message); setLoading(false); return }
       router.replace('/')
     } else {
-      const { error: err } = await supabase.auth.signUp({ email, password })
+      const { error: err } = await getSupabase().auth.signUp({ email, password })
       if (err) { setError(err.message); setLoading(false); return }
       setSignedUp(true)
       setLoading(false)
