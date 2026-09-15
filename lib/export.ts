@@ -55,23 +55,17 @@ async function getFFmpeg(): Promise<any> {
   const { FFmpeg } = (window as any).FFmpegWASM
   const ffmpeg = new FFmpeg()
 
-  // Use absolute URLs — the webpack runtime inside 814.ffmpeg.js can't load
-  // blob: URLs (it doesn't recognise them as chunk IDs), but same-origin
-  // absolute URLs fall through to native fetch/import correctly.
+  // classWorkerURL uses our standalone module worker (public/ffmpeg-worker.js)
+  // instead of the webpack-bundled 814.ffmpeg.js, which can't dynamically
+  // import external URLs (its webpack runtime only knows bundled chunk IDs).
   const base = window.location.origin
   const isMT = typeof SharedArrayBuffer !== 'undefined'
-  if (isMT) {
-    await ffmpeg.load({
-      coreURL:   `${base}/ffmpeg-core.js`,
-      wasmURL:   `${base}/ffmpeg-core.wasm`,
-      workerURL: `${base}/ffmpeg-core.worker.js`,
-    })
-  } else {
-    await ffmpeg.load({
-      coreURL: `${base}/ffmpeg-core-st.js`,
-      wasmURL: `${base}/ffmpeg-core-st.wasm`,
-    })
-  }
+  await ffmpeg.load({
+    classWorkerURL: `${base}/ffmpeg-worker.js`,
+    coreURL:   `${base}/${isMT ? 'ffmpeg-core.js'    : 'ffmpeg-core-st.js'}`,
+    wasmURL:   `${base}/${isMT ? 'ffmpeg-core.wasm'  : 'ffmpeg-core-st.wasm'}`,
+    ...(isMT ? { workerURL: `${base}/ffmpeg-core.worker.js` } : {}),
+  })
 
   ffmpegInstance = ffmpeg
   return ffmpeg
