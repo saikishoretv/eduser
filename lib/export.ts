@@ -1,4 +1,6 @@
-import type { FFmpeg as FFmpegType } from '@ffmpeg/ffmpeg'
+// @ffmpeg/ffmpeg and @ffmpeg/util are loaded at runtime via UMD script tags
+// (public/ffmpeg.js + public/ffmpeg-util.js) to avoid Turbopack/webpack
+// mangling their internal `new Worker(new URL(..., import.meta.url))` calls.
 import { Clip, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
 import { FormatPreset } from '@/lib/formats'
 import { SubtitleStyle, TransitionType } from '@/store/store'
@@ -26,14 +28,27 @@ export interface ExportOptions {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-let ffmpegInstance: any | null = null
+let ffmpegInstance: any = null
 
-async function getFFmpeg(): Promise<FFmpegType> {
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) { resolve(); return }
+    const s = document.createElement('script')
+    s.src = src
+    s.onload = () => resolve()
+    s.onerror = () => reject(new Error(`Failed to load script: ${src}`))
+    document.head.appendChild(s)
+  })
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getFFmpeg(): Promise<any> {
   if (ffmpegInstance) return ffmpegInstance
-  // Dynamic imports prevent Turbopack from bundling @ffmpeg/* and mangling
-  // their internal dynamic import(variable) calls at build time.
-  const { FFmpeg }             = await import('@ffmpeg/ffmpeg')
-  const { toBlobURL }          = await import('@ffmpeg/util')
+  await Promise.all([loadScript('/ffmpeg.js'), loadScript('/ffmpeg-util.js')])
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const w = window as any
+  const { FFmpeg }    = w.FFmpegWASM
+  const { toBlobURL } = w.FFmpegUtil
   const ffmpeg = new FFmpeg()
 
   const isMT = typeof SharedArrayBuffer !== 'undefined'
@@ -401,7 +416,6 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     standardSubtitleAppearance, onProgress,
   } = opts
 
-  const { fetchFile } = await import('@ffmpeg/util')
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let ffmpeg: any
   try {
@@ -410,6 +424,8 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     resetFFmpeg()
     throw new Error(`Failed to load FFmpeg: ${err instanceof Error ? err.message : err}`)
   }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { fetchFile } = (window as any).FFmpegUtil
   console.log('[export] FFmpeg loaded')
 
   const progressHandler = ({ progress }: { progress: number }) => onProgress(Math.max(0, Math.min(1, progress)))
