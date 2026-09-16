@@ -460,27 +460,32 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     }
 
     // Determine output dimensions.
-    // `resolution` = the longer side cap (e.g. 1080 means 1080px on the longer axis).
+    // `resolution` = the SHORT side (standard convention: 1080p means 1080px on the shorter axis).
+    // Landscape/square: short side = height. Portrait: short side = width.
     let targetW: number, targetH: number
     if (outputFormat) {
       if (outputFormat.aspectW >= outputFormat.aspectH) {
-        targetW = resolution
-        targetH = Math.round(resolution * outputFormat.aspectH / outputFormat.aspectW)
-      } else {
+        // Landscape or square: short side is height
         targetH = resolution
         targetW = Math.round(resolution * outputFormat.aspectW / outputFormat.aspectH)
+      } else {
+        // Portrait: short side is width
+        targetW = resolution
+        targetH = Math.round(resolution * outputFormat.aspectH / outputFormat.aspectW)
       }
     } else {
-      // "Original" — preserve source aspect ratio, cap longer side at resolution
+      // "Original" — preserve source aspect ratio, resolution = short side
       const firstSource = sources.find(s => clips.some(c => c.sourceId === s.id))
       const srcW = firstSource?.width ?? 1920
       const srcH = firstSource?.height ?? 1080
       if (srcW >= srcH) {
-        targetW = resolution
-        targetH = Math.round(resolution * srcH / srcW)
-      } else {
+        // Landscape or square: short side is height
         targetH = resolution
         targetW = Math.round(resolution * srcW / srcH)
+      } else {
+        // Portrait: short side is width
+        targetW = resolution
+        targetH = Math.round(resolution * srcH / srcW)
       }
     }
 
