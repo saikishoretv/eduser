@@ -59,12 +59,14 @@ async function getFFmpeg(): Promise<any> {
   // resolves to the correct URL (absolute URLs ignore the base).
   // ffmpeg-worker.js is a module worker that uses native import() to load the core.
   const base = window.location.origin
-  const isMT = typeof SharedArrayBuffer !== 'undefined' && crossOriginIsolated
+  // MT mode (pthreads) deadlocks: pthreads proxy receiveProgress to the module worker
+  // thread via Atomics.wait, but that thread is blocked executing _ffmpeg() → deadlock.
+  // ST mode runs all encoding synchronously; C→JS callbacks fire during WASM execution
+  // and self.postMessage() reaches the parent page normally.
   await ffmpeg.load({
     classWorkerURL: `${base}/ffmpeg-worker.js`,
-    coreURL:   `${base}/${isMT ? 'ffmpeg-core.js'   : 'ffmpeg-core-st.js'}`,
-    wasmURL:   `${base}/${isMT ? 'ffmpeg-core.wasm' : 'ffmpeg-core-st.wasm'}`,
-    ...(isMT ? { workerURL: `${base}/ffmpeg-core.worker.js` } : {}),
+    coreURL: `${base}/ffmpeg-core-st.js`,
+    wasmURL: `${base}/ffmpeg-core-st.wasm`,
   })
 
   ffmpegInstance = ffmpeg
