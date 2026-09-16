@@ -52,6 +52,7 @@ interface EditorStore {
   undoFuture: UndoSnapshot[]
 
   createProject: (name: string, source: SourceVideo) => string
+  addSourceToProject: (source: SourceVideo) => void
   deleteProject: (id: string) => void
   hydrateProject: (project: Project) => void
   setActiveProject: (id: string) => void
@@ -188,6 +189,20 @@ export const useEditorStore = create<EditorStore>()(
         set(s => ({ projects: [...s.projects, project] }))
         return id
       },
+
+      addSourceToProject: (source) => set(s => {
+        const project = activeProject(s)
+        if (!project) return s
+        const clip: Clip = { id: uid(), sourceId: source.id, name: source.name, trimStart: 0, trimEnd: source.duration }
+        return {
+          projects: s.projects.map(p =>
+            p.id === project.id
+              ? { ...p, sources: [...p.sources, source], clips: [...p.clips, clip] }
+              : p
+          ),
+          ...withUndo(s),
+        }
+      }),
 
       hydrateProject: (project) => set(s => ({
         projects: s.projects.some(p => p.id === project.id)

@@ -28,10 +28,12 @@ export default function Timeline() {
   const scrollRef      = useRef<HTMLDivElement>(null)
   const fileInputRef   = useRef<HTMLInputElement>(null)
   const imgInputRef    = useRef<HTMLInputElement>(null)
+  const videoInputRef  = useRef<HTMLInputElement>(null)
   const [hoverX, setHoverX]       = useState<number | null>(null)
   const [hoverTime, setHoverTime] = useState<number | null>(null)
   const [uploading, setUploading] = useState(false)
   const [addingImg, setAddingImg] = useState(false)
+  const [addingClip, setAddingClip] = useState(false)
 
   const clips         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
   const audioLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_AUDIO_LAYERS)
@@ -48,8 +50,9 @@ export default function Timeline() {
   const clearSelection = useEditorStore(s => s.clearSelection)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
   const setSelectedOverlayId    = useEditorStore(s => s.setSelectedOverlayId)
-  const addAudioLayer   = useEditorStore(s => s.addAudioLayer)
-  const addOverlayLayer = useEditorStore(s => s.addOverlayLayer)
+  const addAudioLayer        = useEditorStore(s => s.addAudioLayer)
+  const addOverlayLayer      = useEditorStore(s => s.addOverlayLayer)
+  const addSourceToProject   = useEditorStore(s => s.addSourceToProject)
   const setZoom         = useEditorStore(s => s.setZoom)
   const clipSpeeds      = useEditorStore(s => s.clipSpeeds)
 
@@ -150,6 +153,53 @@ export default function Timeline() {
     }
   }
 
+  async function handleVideoFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    e.target.value = ''
+    setAddingClip(true)
+    try {
+      const objectUrl = URL.createObjectURL(file)
+      const { duration, width, height } = await new Promise<{ duration: number; width: number; height: number }>((resolve, reject) => {
+        const v = document.createElement('video')
+        v.preload = 'metadata'
+        v.onloadedmetadata = () => resolve({ duration: v.duration, width: v.videoWidth, height: v.videoHeight })
+        v.onerror = reject
+        v.src = objectUrl
+      })
+      const sourceId = crypto.randomUUID()
+
+      // Upload to S3
+      const urlRes = await fetch('/api/sources/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceId, fileName: file.name, contentType: file.type }),
+      })
+      if (!urlRes.ok) throw new Error('Failed to get upload URL')
+      const { uploadUrl, s3Key } = await urlRes.json()
+
+      const [uploadRes] = await Promise.all([
+        fetch(uploadUrl, { method: 'PUT', body: file, headers: { 'Content-Type': file.type } }),
+        saveBlob(sourceId, file),
+      ])
+      if (!uploadRes.ok) throw new Error('S3 upload failed')
+
+      addSourceToProject({
+        id: sourceId,
+        name: file.name.replace(/\.[^.]+$/, ''),
+        duration,
+        width,
+        height,
+        objectUrl,
+        s3Key,
+      })
+    } catch (err) {
+      console.error('Failed to add clip:', err)
+    } finally {
+      setAddingClip(false)
+    }
+  }
+
   async function handleImageFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -202,6 +252,24 @@ export default function Timeline() {
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-neutral-800 shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-neutral-500 font-medium">Timeline</span>
+          <button
+            onClick={() => videoInputRef.current?.click()}
+            disabled={addingClip}
+            className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors disabled:opacity-40"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+            </svg>
+            {addingClip ? 'Uploading…' : 'Add clip'}
+          </button>
+          <input
+            ref={videoInputRef}
+            type="file"
+            accept="video/*"
+            className="hidden"
+            onChange={handleVideoFileChange}
+          />
+
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading}
