@@ -13,6 +13,7 @@ export interface ExportOptions {
   outputFormat: FormatPreset | null
   clipCrops: Record<string, { x: number; y: number }>
   clipZooms: Record<string, number>
+  clipSpeeds: Record<string, number>
   resolution: 720 | 1080
   audioLayers: AudioLayer[]
   overlayLayers: OverlayLayer[]
@@ -209,6 +210,7 @@ function buildSubEvents(
   timings: Array<{ clip: Clip; start: number; end: number; index: number }>,
   sources: SourceVideo[],
   style: 'standard' | 'highlight',
+  clipSpeeds: Record<string, number>,
 ): SubEvent[] {
   const events: SubEvent[] = []
   for (const timing of timings) {
@@ -216,7 +218,9 @@ function buildSubEvents(
     // Use translated transcript when active, fall back to original
     const transcript = source?.translatedTranscript ?? source?.transcript
     if (!transcript?.length) continue
-    const offset = timing.start - timing.clip.trimStart
+    const speed = clipSpeeds[timing.clip.id] ?? 1
+    // Convert source time to timeline time: tl = timing.start + (src - trimStart) / speed
+    const toTimeline = (src: number) => timing.start + (src - timing.clip.trimStart) / speed
 
     for (const seg of transcript) {
       if (seg.end <= timing.clip.trimStart || seg.start >= timing.clip.trimEnd) continue
@@ -224,8 +228,8 @@ function buildSubEvents(
       if (style === 'standard') {
         // One event per segment — plain text
         events.push({
-          startAt: Math.max(seg.start, timing.clip.trimStart) + offset,
-          endAt:   Math.min(seg.end,   timing.clip.trimEnd)   + offset,
+          startAt: toTimeline(Math.max(seg.start, timing.clip.trimStart)),
+          endAt:   toTimeline(Math.min(seg.end,   timing.clip.trimEnd)),
           words: [{ word: seg.text, active: true }],
         })
       } else {
@@ -235,8 +239,8 @@ function buildSubEvents(
         if (!words.length) {
           // No word-level timestamps — fall back to segment-level
           events.push({
-            startAt: Math.max(seg.start, timing.clip.trimStart) + offset,
-            endAt:   Math.min(seg.end,   timing.clip.trimEnd)   + offset,
+            startAt: toTimeline(Math.max(seg.start, timing.clip.trimStart)),
+            endAt:   toTimeline(Math.min(seg.end,   timing.clip.trimEnd)),
             words: [{ word: seg.text, active: true }],
           })
           continue
@@ -247,8 +251,8 @@ function buildSubEvents(
           const windowStart = Math.max(0, wi - 1)
           const windowEnd   = Math.min(words.length, windowStart + 4)
           events.push({
-            startAt: Math.max(word.start, timing.clip.trimStart) + offset,
-            endAt:   Math.min(word.end,   timing.clip.trimEnd)   + offset,
+            startAt: toTimeline(Math.max(word.start, timing.clip.trimStart)),
+            endAt:   toTimeline(Math.min(word.end,   timing.clip.trimEnd)),
             words: words.slice(windowStart, windowEnd).map((w, di) => ({
               word: w.word,
               active: windowStart + di === wi,
@@ -410,11 +414,25 @@ function applyClipTransitions(
   return cur
 }
 
+// ─── Audio tempo chain (atempo only supports 0.5–2.0, chain for other speeds) ─
+
+function buildAtempoChain(speed: number): string {
+  if (speed === 1) return ''
+  const filters: string[] = []
+  let s = speed
+  // For speed > 2: chain atempo=2 repeatedly until remainder fits 0.5–2
+  while (s > 2) { filters.push('atempo=2'); s /= 2 }
+  // For speed < 0.5: chain atempo=0.5 repeatedly
+  while (s < 0.5) { filters.push('atempo=0.5'); s /= 0.5 }
+  filters.push(`atempo=${s.toFixed(6)}`)
+  return ',' + filters.join(',')
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function exportVideo(opts: ExportOptions): Promise<Blob> {
   const {
-    clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms,
+    clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds,
     clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations,
     resolution, subtitleStyle, subtitleAppearance,
     standardSubtitleAppearance, onProgress,
@@ -437,7 +455,7 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
   ffmpeg.on('log', logHandler)
 
   try {
-    const timings = getClipTimings(clips)
+    const timings = getClipTimings(clips, clipSpeeds)
     const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
 
     // Write source files to FFmpeg virtual FS (deduplicated by sourceId)
@@ -496,7 +514,7 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
 
     // Build subtitle events (canvas-rendered, no FFmpeg font dependency)
     const subEvents: SubEvent[] = subtitleStyle !== 'off'
-      ? buildSubEvents(timings, sources, subtitleStyle as 'standard' | 'highlight')
+      ? buildSubEvents(timings, sources, subtitleStyle as 'standard' | 'highlight', clipSpeeds)
       : []
     console.log(`[export] ${subEvents.length} subtitle events (style: ${subtitleStyle})`)
 
@@ -719,7 +737,9 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const crop = clipCrops[clip.id] ?? { x: 50, y: 50 }
       const zoom = clipZooms[clip.id] ?? 1
 
-      const trimFilter = `[${srcIdx}:v]trim=start=${clip.trimStart}:end=${clip.trimEnd},setpts=PTS-STARTPTS`
+      const speed = clipSpeeds[clip.id] ?? 1
+      const speedVideoFilter = speed !== 1 ? `,setpts=PTS/${speed.toFixed(6)}` : ''
+      const trimFilter = `[${srcIdx}:v]trim=start=${clip.trimStart}:end=${clip.trimEnd},setpts=PTS-STARTPTS${speedVideoFilter}`
       const trimLabel = `[trim${i}]`
 
       let scaleAndCrop = ''
@@ -746,7 +766,8 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const finalLabel = applyClipTransitions(i, clipDur, tIn, tOut, clipTransitionDurations[clip.id] ?? 0.5, outW, outH, filterParts)
       finalVideoLabels.push(finalLabel)
 
-      filterParts.push(`[${srcIdx}:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS[atrim${i}]`)
+      const atempoChain = buildAtempoChain(speed)
+      filterParts.push(`[${srcIdx}:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS${atempoChain}[atrim${i}]`)
     }
 
     const videoInputs = finalVideoLabels.join('')

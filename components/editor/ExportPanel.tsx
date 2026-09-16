@@ -16,6 +16,7 @@ export default function ExportPanel({ onClose }: Props) {
   const outputFormat            = useEditorStore(s => s.outputFormat)
   const clipCrops               = useEditorStore(s => s.clipCrops)
   const clipZooms               = useEditorStore(s => s.clipZooms)
+  const clipSpeeds              = useEditorStore(s => s.clipSpeeds)
   const clipColorCorrections    = useEditorStore(s => s.clipColorCorrections)
   const clipTransitionIn        = useEditorStore(s => s.clipTransitionIn)
   const clipTransitionOut       = useEditorStore(s => s.clipTransitionOut)
@@ -52,6 +53,7 @@ export default function ExportPanel({ onClose }: Props) {
         outputFormat,
         clipCrops,
         clipZooms,
+        clipSpeeds,
         clipColorCorrections,
         clipTransitionIn,
         clipTransitionOut,
@@ -72,7 +74,7 @@ export default function ExportPanel({ onClose }: Props) {
       setError(err instanceof Error ? err.message : 'Export failed')
       setPhase('error')
     }
-  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitleAppearance, standardSubtitleAppearance])
+  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitleAppearance, standardSubtitleAppearance])
 
   const handleDownload = () => {
     if (!downloadUrl) return

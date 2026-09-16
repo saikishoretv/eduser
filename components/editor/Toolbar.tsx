@@ -70,6 +70,8 @@ export default function Toolbar() {
   const clipTransitionOut       = useEditorStore(s => s.clipTransitionOut)
   const clipColorCorrections    = useEditorStore(s => s.clipColorCorrections)
 
+  const clipSpeeds         = useEditorStore(s => s.clipSpeeds)
+  const setClipSpeed       = useEditorStore(s => s.setClipSpeed)
   const split              = useEditorStore(s => s.split)
   const cut                = useEditorStore(s => s.cut)
   const copy               = useEditorStore(s => s.copy)
@@ -134,6 +136,13 @@ export default function Toolbar() {
     selectedClipIds.forEach(id => setClipTransitionDuration(id, value))
   const handleTransitionInChange  = (t: TransitionType) => selectedClipIds.forEach(id => setClipTransitionIn(id, t))
   const handleTransitionOutChange = (t: TransitionType) => selectedClipIds.forEach(id => setClipTransitionOut(id, t))
+
+  // ── Speed ────────────────────────────────────────────────────────────────────
+  const selectedSpeedValues = selectedClipIds.map(id => clipSpeeds[id] ?? 1)
+  const activeSpeed: number | 'mixed' = selectedSpeedValues.every(s => s === selectedSpeedValues[0])
+    ? selectedSpeedValues[0] ?? 1
+    : 'mixed'
+  const handleSpeedChange = (speed: number) => selectedClipIds.forEach(id => setClipSpeed(id, speed))
 
   const primaryClipId2 = selectedClipIds[0] ?? null
   const primaryTransitionIn  = primaryClipId2 ? (clipTransitionIn[primaryClipId2]  ?? 'none') : 'none'
@@ -650,6 +659,26 @@ export default function Toolbar() {
                 reset
               </button>
             )}
+          </div>
+
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+
+          {/* Speed presets */}
+          <div className="flex items-center gap-1 px-1">
+            <span className="text-[11px] text-neutral-500 mr-0.5">Speed</span>
+            {([0.5, 1, 1.5, 2, 4] as const).map(s => (
+              <button
+                key={s}
+                onClick={() => handleSpeedChange(s)}
+                className={`px-2 py-1 rounded text-[11px] font-medium tabular-nums transition-colors ${
+                  activeSpeed === s
+                    ? 'bg-blue-600 text-white'
+                    : 'text-neutral-400 hover:bg-neutral-700 hover:text-white'
+                }`}
+              >
+                {s}×
+              </button>
+            ))}
           </div>
 
           <div className="w-px h-4 bg-neutral-700 mx-1" />

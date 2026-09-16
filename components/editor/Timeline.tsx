@@ -51,8 +51,9 @@ export default function Timeline() {
   const addAudioLayer   = useEditorStore(s => s.addAudioLayer)
   const addOverlayLayer = useEditorStore(s => s.addOverlayLayer)
   const setZoom         = useEditorStore(s => s.setZoom)
+  const clipSpeeds      = useEditorStore(s => s.clipSpeeds)
 
-  const timings = getClipTimings(clips)
+  const timings = getClipTimings(clips, clipSpeeds)
   const clipsDuration   = timings.length > 0 ? timings[timings.length - 1].end : 0
   const audioDuration   = audioLayers.reduce((max, l) => Math.max(max, l.startAt + (l.trimEnd - l.trimStart)), 0)
   const overlayDuration = overlayLayers.reduce((max, ol) => Math.max(max, ol.startAt + ol.duration), 0)

@@ -132,6 +132,7 @@ export default function Preview() {
   const clipTransitionIn  = useEditorStore(s => s.clipTransitionIn)
   const clipTransitionOut = useEditorStore(s => s.clipTransitionOut)
   const clipColorCorrections = useEditorStore(s => s.clipColorCorrections)
+  const clipSpeeds = useEditorStore(s => s.clipSpeeds)
   const subtitleStyle = useEditorStore(s => s.subtitleStyle)
   const subtitleAppearance = useEditorStore(s => s.subtitleAppearance)
   const standardSubtitleAppearance = useEditorStore(s => s.standardSubtitleAppearance)
@@ -140,9 +141,9 @@ export default function Preview() {
   const setClipCrop = useEditorStore(s => s.setClipCrop)
   const pushUndo    = useEditorStore(s => s.pushUndo)
 
-  const timings = getClipTimings(clips)
+  const timings = getClipTimings(clips, clipSpeeds)
   const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
-  const clipKey = clips.map(c => `${c.id}:${c.trimStart}:${c.trimEnd}`).join('|')
+  const clipKey = clips.map(c => `${c.id}:${c.trimStart}:${c.trimEnd}:${clipSpeeds[c.id] ?? 1}`).join('|')
 
   // Which clip the playhead is currently in
   const activeTiming: ClipTiming | null =
@@ -157,7 +158,7 @@ export default function Preview() {
     ? sources.find(s => s.id === activeTiming.clip.sourceId)
     : null
   const currentSourceTime = activeTiming
-    ? activeTiming.clip.trimStart + ((previewTime ?? playheadTime) - activeTiming.start)
+    ? activeTiming.clip.trimStart + ((previewTime ?? playheadTime) - activeTiming.start) * (clipSpeeds[activeTiming.clip.id] ?? 1)
     : 0
   // Use translated transcript when active, fall back to original
   const activeTranscript = activeSource?.translatedTranscript ?? activeSource?.transcript
@@ -189,6 +190,7 @@ export default function Preview() {
   const clipTransitionInRef  = useRef(clipTransitionIn)
   const clipTransitionOutRef = useRef(clipTransitionOut)
   const clipColorCorrectionsRef = useRef(clipColorCorrections)
+  const clipSpeedsRef = useRef(clipSpeeds)
   const outputFormatRef = useRef(outputFormat)
   const timingsRef = useRef(timings)
   clipCropsRef.current = clipCrops
@@ -198,6 +200,7 @@ export default function Preview() {
   clipTransitionInRef.current  = clipTransitionIn
   clipTransitionOutRef.current = clipTransitionOut
   clipColorCorrectionsRef.current = clipColorCorrections
+  clipSpeedsRef.current = clipSpeeds
   outputFormatRef.current = outputFormat
   timingsRef.current = timings
 
@@ -246,13 +249,14 @@ export default function Preview() {
   function applyClip(clipIdx: number, seekTo: number) {
     const video = videoRef.current
     if (!video) return
-    const timing = timings[clipIdx]
+    const timing = timingsRef.current[clipIdx]
     if (!timing) return
     const source = sources.find(s => s.id === timing.clip.sourceId)
     if (!source) return
     activeClipIdxRef.current = clipIdx
     if (video.src !== source.objectUrl) video.src = source.objectUrl
     video.currentTime = seekTo
+    video.playbackRate = clipSpeedsRef.current[timing.clip.id] ?? 1
     const cc = clipColorCorrectionsRef.current[timing.clip.id] ?? COLOR_CORRECTION_DEFAULT
     video.style.filter = toCssFilter(cc)
   }
@@ -386,7 +390,8 @@ export default function Preview() {
       const now = performance.now()
       if (now - lastSyncRef.current > 33) {
         lastSyncRef.current = now
-        const currentTimeline = timing.start + (video.currentTime - clip.trimStart)
+        const speed = clipSpeedsRef.current[clip.id] ?? 1
+        const currentTimeline = timing.start + (video.currentTime - clip.trimStart) / speed
         setPlayhead(currentTimeline)
         syncAudioToTime(currentTimeline, true)
       }

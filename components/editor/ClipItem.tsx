@@ -22,6 +22,7 @@ export default function ClipItem({ timing, zoom }: Props) {
   const { clip, start, duration, index } = timing
 
   const isSelected = useEditorStore(s => s.selectedClipIds.includes(clip.id))
+  const speed      = useEditorStore(s => s.clipSpeeds[clip.id] ?? 1)
   const selectClip = useEditorStore(s => s.selectClip)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
   const setSelectedOverlayId    = useEditorStore(s => s.setSelectedOverlayId)
@@ -102,8 +103,11 @@ export default function ClipItem({ timing, zoom }: Props) {
       style={{ left: leftPx, width: Math.max(widthPx - 2, 3) }}
     >
       {widthPx > 40 && (
-        <span className="absolute inset-0 flex items-center px-2 text-[11px] text-white/90 font-medium truncate pointer-events-none select-none">
+        <span className="absolute inset-0 flex items-center px-2 text-[11px] text-white/90 font-medium truncate pointer-events-none select-none gap-1.5">
           {clip.name}
+          {speed !== 1 && (
+            <span className="shrink-0 text-[10px] bg-black/40 px-1 rounded">{speed}×</span>
+          )}
         </span>
       )}
       {/* Left trim handle */}

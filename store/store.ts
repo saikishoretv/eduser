@@ -20,6 +20,7 @@ type UndoSnapshot = {
   clipTransitionIn: Record<string, TransitionType>
   clipTransitionOut: Record<string, TransitionType>
   clipColorCorrections: Record<string, ColorCorrection>
+  clipSpeeds: Record<string, number>
 }
 
 interface EditorStore {
@@ -42,6 +43,7 @@ interface EditorStore {
   clipTransitionIn: Record<string, TransitionType>
   clipTransitionOut: Record<string, TransitionType>
   clipColorCorrections: Record<string, ColorCorrection>
+  clipSpeeds: Record<string, number>
   subtitleStyle: SubtitleStyle
   subtitleAppearance: SubtitleAppearance
   standardSubtitleAppearance: StandardSubtitleAppearance
@@ -70,6 +72,7 @@ interface EditorStore {
   setClipTransitionOut: (clipId: string, t: TransitionType) => void
   setClipColorCorrection: (clipId: string, cc: ColorCorrection) => void
   setAllClipsColorCorrection: (cc: ColorCorrection) => void
+  setClipSpeed: (clipId: string, speed: number) => void
   addAudioLayer: (layer: AudioLayer) => void
   removeAudioLayer: (layerId: string) => void
   updateAudioLayer: (layerId: string, patch: Partial<Pick<AudioLayer, 'volume' | 'startAt' | 'trimStart' | 'trimEnd'>>) => void
@@ -137,6 +140,7 @@ function captureSnapshot(s: EditorStore): UndoSnapshot {
     clipTransitionIn: s.clipTransitionIn,
     clipTransitionOut: s.clipTransitionOut,
     clipColorCorrections: s.clipColorCorrections,
+    clipSpeeds: s.clipSpeeds,
   }
 }
 
@@ -170,6 +174,7 @@ export const useEditorStore = create<EditorStore>()(
       clipTransitionIn: {},
       clipTransitionOut: {},
       clipColorCorrections: {},
+      clipSpeeds: {},
       subtitleStyle: 'off' as SubtitleStyle,
       subtitleAppearance: SUBTITLE_DEFAULT,
       standardSubtitleAppearance: STANDARD_SUBTITLE_DEFAULT,
@@ -361,6 +366,10 @@ export const useEditorStore = create<EditorStore>()(
           ...withUndo(s),
         }
       }),
+      setClipSpeed: (clipId, speed) => set(s => ({
+        clipSpeeds: { ...s.clipSpeeds, [clipId]: speed },
+        ...withUndo(s),
+      })),
       setSubtitleStyle: (style) => set({ subtitleStyle: style }),
       setSubtitleAppearance: (appearance) => set({ subtitleAppearance: appearance }),
       setStandardSubtitleAppearance: (appearance) => set({ standardSubtitleAppearance: appearance }),
@@ -525,7 +534,7 @@ export const useEditorStore = create<EditorStore>()(
         set(s => {
           const project = activeProject(s)
           if (!project) return s
-          const timings = getClipTimings(project.clips)
+          const timings = getClipTimings(project.clips, s.clipSpeeds)
           const timing = timings.find(t => t.clip.id === clipId)
           if (!timing) return s
           const source = project.sources.find(src => src.id === timing.clip.sourceId)
@@ -557,11 +566,12 @@ export const useEditorStore = create<EditorStore>()(
         set(s => {
           const project = activeProject(s)
           if (!project) return s
-          const timings = getClipTimings(project.clips)
+          const timings = getClipTimings(project.clips, s.clipSpeeds)
           const current = timings.find(t => s.playheadTime > t.start && s.playheadTime < t.end)
           if (!current) return s
           const { clip, start } = current
-          const splitPoint = clip.trimStart + (s.playheadTime - start)
+          const speed = s.clipSpeeds[clip.id] ?? 1
+          const splitPoint = clip.trimStart + (s.playheadTime - start) * speed
           if (splitPoint <= clip.trimStart + 0.01 || splitPoint >= clip.trimEnd - 0.01) return s
           const first: Clip = { ...clip, id: uid(), trimEnd: splitPoint, name: clip.name + ' A' }
           const second: Clip = { ...clip, id: uid(), trimStart: splitPoint, name: clip.name + ' B' }
@@ -608,7 +618,7 @@ export const useEditorStore = create<EditorStore>()(
         set(s => {
           const project = activeProject(s)
           if (!project || !s.clipboard.length) return s
-          const timings = getClipTimings(project.clips)
+          const timings = getClipTimings(project.clips, s.clipSpeeds)
           let insertAfter = project.clips.length - 1
           if (s.selectedClipIds.length > 0) {
             const indices = getSelectedIndices(project.clips, s.selectedClipIds)
@@ -761,6 +771,7 @@ export const useEditorStore = create<EditorStore>()(
         clipTransitionIn: s.clipTransitionIn,
         clipTransitionOut: s.clipTransitionOut,
         clipColorCorrections: s.clipColorCorrections,
+        clipSpeeds: s.clipSpeeds,
         subtitleStyle: s.subtitleStyle,
         subtitleAppearance: s.subtitleAppearance,
         standardSubtitleAppearance: s.standardSubtitleAppearance,

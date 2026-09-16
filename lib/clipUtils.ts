@@ -8,18 +8,19 @@ export interface ClipTiming {
   index: number
 }
 
-export function getClipTimings(clips: Clip[]): ClipTiming[] {
+export function getClipTimings(clips: Clip[], clipSpeeds?: Record<string, number>): ClipTiming[] {
   let t = 0
   return clips.map((clip, index) => {
-    const duration = clip.trimEnd - clip.trimStart
+    const speed = clipSpeeds?.[clip.id] ?? 1
+    const duration = (clip.trimEnd - clip.trimStart) / speed
     const timing: ClipTiming = { clip, start: t, end: t + duration, duration, index }
     t += duration
     return timing
   })
 }
 
-export function getTotalDuration(clips: Clip[]): number {
-  return clips.reduce((sum, c) => sum + (c.trimEnd - c.trimStart), 0)
+export function getTotalDuration(clips: Clip[], clipSpeeds?: Record<string, number>): number {
+  return clips.reduce((sum, c) => sum + (c.trimEnd - c.trimStart) / (clipSpeeds?.[c.id] ?? 1), 0)
 }
 
 export function formatTime(seconds: number): string {
