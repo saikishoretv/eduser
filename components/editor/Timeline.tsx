@@ -342,9 +342,17 @@ export default function Timeline() {
           >
             −
           </button>
-          <span className="text-[11px] text-neutral-500 w-14 text-center tabular-nums">
-            {Math.round(zoom)}px/s
-          </span>
+          <input
+            type="number"
+            min={20}
+            max={500}
+            value={Math.round(zoom)}
+            onChange={e => setZoom(Number(e.target.value))}
+            onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+            aria-label="Zoom level in pixels per second"
+            className="w-14 text-center text-[11px] text-neutral-300 bg-neutral-800 border border-neutral-700 rounded px-1 py-0.5 tabular-nums focus:outline-none focus:border-neutral-500"
+          />
+          <span className="text-[11px] text-neutral-600">px/s</span>
           <button
             onClick={() => setZoom(zoom * 1.5)}
             aria-label="Zoom in"
