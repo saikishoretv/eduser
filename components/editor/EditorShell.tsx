@@ -23,6 +23,10 @@ export default function EditorShell({ projectId }: Props) {
   const hydrateProject    = useEditorStore(s => s.hydrateProject)
   const subtitleStyle    = useEditorStore(s => s.subtitleStyle)
   const setSubtitleStyle = useEditorStore(s => s.setSubtitleStyle)
+  const undo             = useEditorStore(s => s.undo)
+  const redo             = useEditorStore(s => s.redo)
+  const canUndo          = useEditorStore(s => s.undoPast.length > 0)
+  const canRedo          = useEditorStore(s => s.undoFuture.length > 0)
 
   const [showCCModal,   setShowCCModal]   = useState(false)
   const [showCCWarning, setShowCCWarning] = useState(false)
@@ -158,6 +162,35 @@ export default function EditorShell({ projectId }: Props) {
         </button>
         <span className="w-px h-4 bg-neutral-700" />
         <h1 className="text-sm font-medium text-neutral-200 truncate">{project.name}</h1>
+
+        {/* Undo / Redo */}
+        <div className="flex items-center gap-0.5">
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (⌘Z)"
+            aria-label="Undo"
+            className="p-1.5 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:text-neutral-700 disabled:cursor-not-allowed transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 7v6h6" />
+              <path d="M3 13a9 9 0 1 0 2.83-6.36L3 7" />
+            </svg>
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo}
+            title="Redo (⌘⇧Z)"
+            aria-label="Redo"
+            className="p-1.5 rounded text-neutral-400 hover:text-white hover:bg-neutral-800 disabled:text-neutral-700 disabled:cursor-not-allowed transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 7v6h-6" />
+              <path d="M21 13a9 9 0 1 1-2.83-6.36L21 7" />
+            </svg>
+          </button>
+        </div>
+
         <div className="ml-auto flex items-center gap-3">
           <FormatSelector />
 
