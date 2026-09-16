@@ -459,13 +459,30 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       await ffmpeg.writeFile(`audio_${layer.id}.${ext}`, await fetchFile(layer.objectUrl))
     }
 
-    // Determine output dimensions
-    const targetW = outputFormat
-      ? (outputFormat.aspectW >= outputFormat.aspectH ? resolution : Math.round(resolution * outputFormat.aspectW / outputFormat.aspectH))
-      : resolution
-    const targetH = outputFormat
-      ? (outputFormat.aspectH >= outputFormat.aspectW ? resolution : Math.round(resolution * outputFormat.aspectH / outputFormat.aspectW))
-      : Math.round(resolution * 9 / 16)
+    // Determine output dimensions.
+    // `resolution` = the longer side cap (e.g. 1080 means 1080px on the longer axis).
+    let targetW: number, targetH: number
+    if (outputFormat) {
+      if (outputFormat.aspectW >= outputFormat.aspectH) {
+        targetW = resolution
+        targetH = Math.round(resolution * outputFormat.aspectH / outputFormat.aspectW)
+      } else {
+        targetH = resolution
+        targetW = Math.round(resolution * outputFormat.aspectW / outputFormat.aspectH)
+      }
+    } else {
+      // "Original" — preserve source aspect ratio, cap longer side at resolution
+      const firstSource = sources.find(s => clips.some(c => c.sourceId === s.id))
+      const srcW = firstSource?.width ?? 1920
+      const srcH = firstSource?.height ?? 1080
+      if (srcW >= srcH) {
+        targetW = resolution
+        targetH = Math.round(resolution * srcH / srcW)
+      } else {
+        targetH = resolution
+        targetW = Math.round(resolution * srcW / srcH)
+      }
+    }
 
     // Ensure even dimensions (required by H.264)
     const outW = targetW % 2 === 0 ? targetW : targetW + 1

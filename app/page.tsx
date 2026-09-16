@@ -15,11 +15,11 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function getVideoDuration(url: string): Promise<number> {
+function getVideoMetadata(url: string): Promise<{ duration: number; width: number; height: number }> {
   return new Promise((resolve, reject) => {
     const v = document.createElement('video')
     v.preload = 'metadata'
-    v.onloadedmetadata = () => resolve(v.duration)
+    v.onloadedmetadata = () => resolve({ duration: v.duration, width: v.videoWidth, height: v.videoHeight })
     v.onerror = reject
     v.src = url
   })
@@ -78,7 +78,7 @@ export default function ListingPage() {
     setLoadingLabel('Loading…')
     try {
       const objectUrl = URL.createObjectURL(file)
-      const duration = await getVideoDuration(objectUrl)
+      const { duration, width, height } = await getVideoMetadata(objectUrl)
       const sourceId = crypto.randomUUID()
 
       // Get a presigned S3 URL and upload the file
@@ -101,6 +101,8 @@ export default function ListingPage() {
         id: sourceId,
         name: file.name.replace(/\.[^.]+$/, ''),
         duration,
+        width,
+        height,
         objectUrl,
         s3Key,
       }

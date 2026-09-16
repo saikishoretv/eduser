@@ -15,6 +15,8 @@ export interface SourceVideo {
   id: string
   name: string
   duration: number
+  width: number
+  height: number
   objectUrl: string
   s3Key?: string                // set after upload; used by the DB save (T8) and cache miss handler (T6)
   transcript?: TranscriptSegment[]
