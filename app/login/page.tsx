@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { signIn, signUp, useSession } from '@/lib/auth-client'
 
@@ -16,11 +16,9 @@ export default function LoginPage() {
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState<string | null>(null)
 
-  // Already signed in → redirect
-  if (session) {
-    router.replace('/')
-    return null
-  }
+  useEffect(() => {
+    if (session) router.replace('/')
+  }, [session, router])
 
   function switchTab(next: Tab) {
     setTab(next)
