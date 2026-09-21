@@ -12,7 +12,8 @@ export async function GET(
   if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   const db = await getDb()
-  const doc = await db.collection('projects').findOne({ _id: id as unknown as string, userId: session.user.id })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const doc = await db.collection('projects').findOne({ _id: id as any, userId: session.user.id })
   if (!doc) return Response.json({ error: 'Project not found' }, { status: 404 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -20,9 +21,9 @@ export async function GET(
 
   return Response.json({
     project: {
-      id: doc._id,
-      name: doc.name,
-      createdAt: new Date(doc.createdAt).getTime(),
+      id: String(doc._id),
+      name: doc.name as string,
+      createdAt: new Date(doc.createdAt as string).getTime(),
       clips:         meta.clips         ?? [],
       sources:       meta.sources       ?? [],
       audioLayers:   meta.audioLayers   ?? [],
@@ -48,11 +49,8 @@ export async function PATCH(
   if (name) patch.name = name
 
   const db = await getDb()
-  const result = await db.collection('projects').updateOne(
-    { _id: id as unknown as string, userId: session.user.id },
-    { $set: patch }
-  )
-
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const result = await db.collection('projects').updateOne({ _id: id as any, userId: session.user.id }, { $set: patch })
   if (result.matchedCount === 0) return Response.json({ error: 'Project not found' }, { status: 404 })
 
   return Response.json({ ok: true })
@@ -68,17 +66,17 @@ export async function DELETE(
 
   const db = await getDb()
 
-  // Collect S3 keys before deleting
   const sources = await db.collection('sources').find(
     { projectId: id, userId: session.user.id },
     { projection: { s3Key: 1 } }
   ).toArray()
 
-  await db.collection('projects').deleteOne({ _id: id as unknown as string, userId: session.user.id })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await db.collection('projects').deleteOne({ _id: id as any, userId: session.user.id })
   await db.collection('sources').deleteMany({ projectId: id })
 
   if (sources.length) {
-    await Promise.allSettled(sources.map(s => deleteFile(s.s3Key)))
+    await Promise.allSettled(sources.map(s => deleteFile(s.s3Key as string)))
   }
 
   return Response.json({ ok: true })

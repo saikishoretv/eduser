@@ -32,11 +32,11 @@ export default function LoginPage() {
 
     if (tab === 'signin') {
       const { error: err } = await signIn.email({ email, password })
-      if (err) { setError(err.message); setLoading(false); return }
+      if (err) { setError(err.message ?? 'Sign in failed'); setLoading(false); return }
       router.replace('/')
     } else {
       const { error: err } = await signUp.email({ email, password, name: email.split('@')[0] })
-      if (err) { setError(err.message); setLoading(false); return }
+      if (err) { setError(err.message ?? 'Sign up failed'); setLoading(false); return }
       router.replace('/')
     }
   }

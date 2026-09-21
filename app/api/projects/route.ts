@@ -15,9 +15,9 @@ export async function GET() {
     .toArray()
 
   const projects = docs.map(p => ({
-    id: p._id as string,
-    name: p.name,
-    createdAt: new Date(p.createdAt).getTime(),
+    id: String(p._id),
+    name: p.name as string,
+    createdAt: new Date(p.createdAt as string).getTime(),
   }))
 
   return Response.json({ projects })
@@ -43,26 +43,13 @@ export async function POST(request: Request) {
   const db = await getDb()
   const now = new Date()
 
-  await db.collection('projects').insertOne({
-    _id: projectId as unknown as string,
-    userId,
-    name,
-    metadata,
-    createdAt: now,
-    updatedAt: now,
-  })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await db.collection('projects').insertOne({ _id: projectId as any, userId, name, metadata, createdAt: now, updatedAt: now })
 
   if (sources?.length) {
     await db.collection('sources').insertMany(
-      sources.map(s => ({
-        _id: s.id as unknown as string,
-        projectId,
-        userId,
-        name: s.name,
-        duration: s.duration,
-        s3Key: s.s3Key,
-        createdAt: now,
-      }))
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      sources.map(s => ({ _id: s.id as any, projectId, userId, name: s.name, duration: s.duration, s3Key: s.s3Key, createdAt: now }))
     )
   }
 
