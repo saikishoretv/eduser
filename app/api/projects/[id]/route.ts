@@ -28,6 +28,18 @@ export async function GET(
       sources:       meta.sources       ?? [],
       audioLayers:   meta.audioLayers   ?? [],
       overlayLayers: meta.overlayLayers ?? [],
+      clipCrops:               meta.clipCrops               ?? {},
+      clipZooms:               meta.clipZooms               ?? {},
+      clipZoomPresets:         meta.clipZoomPresets          ?? {},
+      clipTransitionDurations: meta.clipTransitionDurations  ?? {},
+      clipTransitionIn:        meta.clipTransitionIn         ?? {},
+      clipTransitionOut:       meta.clipTransitionOut        ?? {},
+      clipColorCorrections:    meta.clipColorCorrections     ?? {},
+      clipSpeeds:              meta.clipSpeeds               ?? {},
+      subtitleStyle:           meta.subtitleStyle            ?? 'off',
+      subtitleAppearance:      meta.subtitleAppearance       ?? null,
+      standardSubtitleAppearance: meta.standardSubtitleAppearance ?? null,
+      outputFormat:            meta.outputFormat             ?? null,
     },
   })
 }

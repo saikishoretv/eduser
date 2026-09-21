@@ -10,15 +10,21 @@ export async function GET() {
   const db = await getDb()
   const docs = await db
     .collection('projects')
-    .find({ userId }, { projection: { _id: 1, name: 1, createdAt: 1 } })
+    .find({ userId }, { projection: { _id: 1, name: 1, createdAt: 1, 'metadata.clips': 1 } })
     .sort({ updatedAt: -1 })
     .toArray()
 
-  const projects = docs.map(p => ({
-    id: String(p._id),
-    name: p.name as string,
-    createdAt: new Date(p.createdAt as string).getTime(),
-  }))
+  const projects = docs.map(p => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const clips: any[] = (p.metadata as any)?.clips ?? []
+    const duration = clips.reduce((s: number, c: any) => s + ((c.trimEnd ?? 0) - (c.trimStart ?? 0)), 0)
+    return {
+      id: String(p._id),
+      name: p.name as string,
+      createdAt: new Date(p.createdAt as string).getTime(),
+      duration,
+    }
+  })
 
   return Response.json({ projects })
 }

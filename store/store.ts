@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import { persist, createJSONStorage } from 'zustand/middleware'
 import { Clip, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
 import { getClipTimings, getTotalDuration, canMerge, getSelectedIndices } from '@/lib/clipUtils'
 import { FormatPreset } from '@/lib/formats'
@@ -55,7 +54,20 @@ interface EditorStore {
   addSourceToProject: (source: SourceVideo) => void
   renameProject: (id: string, name: string) => void
   deleteProject: (id: string) => void
-  hydrateProject: (project: Project) => void
+  hydrateProject: (data: Project & {
+    clipCrops?: Record<string, { x: number; y: number }>
+    clipZooms?: Record<string, number>
+    clipZoomPresets?: Record<string, ZoomPreset>
+    clipTransitionDurations?: Record<string, number>
+    clipTransitionIn?: Record<string, TransitionType>
+    clipTransitionOut?: Record<string, TransitionType>
+    clipColorCorrections?: Record<string, ColorCorrection>
+    clipSpeeds?: Record<string, number>
+    subtitleStyle?: SubtitleStyle
+    subtitleAppearance?: SubtitleAppearance
+    standardSubtitleAppearance?: StandardSubtitleAppearance
+    outputFormat?: FormatPreset | null
+  }) => void
   setActiveProject: (id: string) => void
   setSourceObjectUrl: (sourceId: string, objectUrl: string) => void
   setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[], detectedLanguage?: string) => void
@@ -153,9 +165,7 @@ function withUndo(s: EditorStore): { undoPast: UndoSnapshot[]; undoFuture: UndoS
   }
 }
 
-export const useEditorStore = create<EditorStore>()(
-  persist(
-    (set, get) => ({
+export const useEditorStore = create<EditorStore>()((set, get) => ({
       projects: [],
       activeProjectId: null,
       selectedClipIds: [],
@@ -209,11 +219,30 @@ export const useEditorStore = create<EditorStore>()(
         }
       }),
 
-      hydrateProject: (project) => set(s => ({
-        projects: s.projects.some(p => p.id === project.id)
-          ? s.projects.map(p => p.id === project.id ? project : p)
-          : [...s.projects, project],
-      })),
+      hydrateProject: (data) => set(s => {
+        const project: Project = {
+          id: data.id, name: data.name, createdAt: data.createdAt,
+          clips: data.clips, sources: data.sources,
+          audioLayers: data.audioLayers, overlayLayers: data.overlayLayers,
+        }
+        return {
+          projects: s.projects.some(p => p.id === project.id)
+            ? s.projects.map(p => p.id === project.id ? project : p)
+            : [...s.projects, project],
+          ...(data.clipCrops !== undefined && { clipCrops: { ...s.clipCrops, ...data.clipCrops } }),
+          ...(data.clipZooms !== undefined && { clipZooms: { ...s.clipZooms, ...data.clipZooms } }),
+          ...(data.clipZoomPresets !== undefined && { clipZoomPresets: { ...s.clipZoomPresets, ...data.clipZoomPresets } }),
+          ...(data.clipTransitionDurations !== undefined && { clipTransitionDurations: { ...s.clipTransitionDurations, ...data.clipTransitionDurations } }),
+          ...(data.clipTransitionIn !== undefined && { clipTransitionIn: { ...s.clipTransitionIn, ...data.clipTransitionIn } }),
+          ...(data.clipTransitionOut !== undefined && { clipTransitionOut: { ...s.clipTransitionOut, ...data.clipTransitionOut } }),
+          ...(data.clipColorCorrections !== undefined && { clipColorCorrections: { ...s.clipColorCorrections, ...data.clipColorCorrections } }),
+          ...(data.clipSpeeds !== undefined && { clipSpeeds: { ...s.clipSpeeds, ...data.clipSpeeds } }),
+          ...(data.subtitleStyle !== undefined && { subtitleStyle: data.subtitleStyle }),
+          ...(data.subtitleAppearance !== undefined && { subtitleAppearance: data.subtitleAppearance }),
+          ...(data.standardSubtitleAppearance !== undefined && { standardSubtitleAppearance: data.standardSubtitleAppearance }),
+          ...(data.outputFormat !== undefined && { outputFormat: data.outputFormat }),
+        }
+      }),
 
       deleteProject: (id) => {
         const project = get().projects.find(p => p.id === id)
@@ -768,35 +797,4 @@ export const useEditorStore = create<EditorStore>()(
           undoFuture: s.undoFuture.slice(0, -1),
         }
       }),
-    }),
-    {
-      name: 'clipr-store',
-      storage: createJSONStorage(() => localStorage),
-      skipHydration: true,
-      // Strip ephemeral state and blob URLs (videos are stored separately in IndexedDB)
-      partialize: (s) => ({
-        projects: s.projects.map(p => ({
-          ...p,
-          sources: p.sources.map(src => ({ ...src, objectUrl: '' })),
-          audioLayers: (p.audioLayers ?? []).map(al => ({ ...al, objectUrl: '' })),
-          overlayLayers: (p.overlayLayers ?? []).map(ol =>
-            ol.type === 'image' ? { ...ol, objectUrl: '' } : ol
-          ),
-        })),
-        outputFormat: s.outputFormat,
-        clipCrops: s.clipCrops,
-        clipZooms: s.clipZooms,
-        clipZoomPresets: s.clipZoomPresets,
-        clipTransitionDurations: s.clipTransitionDurations,
-        clipTransitionIn: s.clipTransitionIn,
-        clipTransitionOut: s.clipTransitionOut,
-        clipColorCorrections: s.clipColorCorrections,
-        clipSpeeds: s.clipSpeeds,
-        subtitleStyle: s.subtitleStyle,
-        subtitleAppearance: s.subtitleAppearance,
-        standardSubtitleAppearance: s.standardSubtitleAppearance,
-        zoom: s.zoom,
-      }),
-    }
-  )
-)
+    }))
