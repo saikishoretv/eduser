@@ -53,6 +53,7 @@ interface EditorStore {
 
   createProject: (name: string, source: SourceVideo) => string
   addSourceToProject: (source: SourceVideo) => void
+  renameProject: (id: string, name: string) => void
   deleteProject: (id: string) => void
   hydrateProject: (project: Project) => void
   setActiveProject: (id: string) => void
@@ -189,6 +190,10 @@ export const useEditorStore = create<EditorStore>()(
         set(s => ({ projects: [...s.projects, project] }))
         return id
       },
+
+      renameProject: (id, name) => set(s => ({
+        projects: s.projects.map(p => p.id === id ? { ...p, name } : p),
+      })),
 
       addSourceToProject: (source) => set(s => {
         const project = activeProject(s)

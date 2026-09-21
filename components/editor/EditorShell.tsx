@@ -27,11 +27,14 @@ export default function EditorShell({ projectId }: Props) {
   const redo             = useEditorStore(s => s.redo)
   const canUndo          = useEditorStore(s => s.undoPast.length > 0)
   const canRedo          = useEditorStore(s => s.undoFuture.length > 0)
+  const renameProject    = useEditorStore(s => s.renameProject)
 
   const [showCCModal,   setShowCCModal]   = useState(false)
   const [showCCWarning, setShowCCWarning] = useState(false)
   const [showExport,    setShowExport]    = useState(false)
   const [hydrating,     setHydrating]     = useState(false)
+  const [editingName,   setEditingName]   = useState(false)
+  const [nameValue,     setNameValue]     = useState('')
 
   const project = projects.find(p => p.id === projectId)
 
@@ -161,7 +164,31 @@ export default function EditorShell({ projectId }: Props) {
           ← Back
         </button>
         <span className="w-px h-4 bg-neutral-700" />
-        <h1 className="text-sm font-medium text-neutral-200 truncate">{project.name}</h1>
+        {editingName ? (
+          <input
+            autoFocus
+            value={nameValue}
+            onChange={e => setNameValue(e.target.value)}
+            onBlur={() => {
+              const trimmed = nameValue.trim()
+              if (trimmed && trimmed !== project.name) renameProject(projectId, trimmed)
+              setEditingName(false)
+            }}
+            onKeyDown={e => {
+              if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+              if (e.key === 'Escape') { setEditingName(false) }
+            }}
+            className="text-sm font-medium text-neutral-200 bg-neutral-800 border border-neutral-600 rounded px-2 py-0.5 focus:outline-none focus:border-blue-500 w-48"
+          />
+        ) : (
+          <h1
+            onClick={() => { setNameValue(project.name); setEditingName(true) }}
+            title="Click to rename"
+            className="text-sm font-medium text-neutral-200 truncate cursor-text hover:text-white"
+          >
+            {project.name}
+          </h1>
+        )}
 
         <div className="ml-auto flex items-center gap-3">
           {/* Undo / Redo */}
