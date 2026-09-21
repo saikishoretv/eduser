@@ -1,34 +1,27 @@
-import { MongoClient, Db } from 'mongodb'
+import { MongoClient } from 'mongodb'
 
 const uri = process.env.MONGODB_URI!
-
-let client: MongoClient
-let db: Db
 
 declare global {
   // eslint-disable-next-line no-var
   var _mongoClient: MongoClient | undefined
+  // eslint-disable-next-line no-var
+  var _mongoConnected: Promise<MongoClient> | undefined
 }
 
-async function connect() {
-  if (db) return db
-
-  if (process.env.NODE_ENV === 'development') {
-    // Reuse across hot reloads in dev
-    if (!global._mongoClient) {
-      global._mongoClient = new MongoClient(uri)
-      await global._mongoClient.connect()
-    }
-    client = global._mongoClient
-  } else {
-    client = new MongoClient(uri)
-    await client.connect()
+function getOrCreateClient(): { client: MongoClient; connected: Promise<MongoClient> } {
+  if (!global._mongoClient) {
+    global._mongoClient = new MongoClient(uri)
+    global._mongoConnected = global._mongoClient.connect()
   }
-
-  db = client.db()
-  return db
+  return { client: global._mongoClient, connected: global._mongoConnected! }
 }
+
+const { client, connected } = getOrCreateClient()
+
+export const mongoClient = client
 
 export async function getDb() {
-  return connect()
+  await connected
+  return client.db()
 }

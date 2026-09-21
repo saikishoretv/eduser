@@ -1,11 +1,9 @@
 import { betterAuth } from 'better-auth'
 import { mongodbAdapter } from 'better-auth/adapters/mongodb'
-import { MongoClient } from 'mongodb'
-
-const client = new MongoClient(process.env.MONGODB_URI!)
+import { mongoClient } from './mongodb'
 
 export const auth = betterAuth({
-  database: mongodbAdapter(client.db()),
+  database: mongodbAdapter(mongoClient.db()),
   secret: process.env.BETTER_AUTH_SECRET!,
   baseURL: process.env.BETTER_AUTH_URL ?? process.env.NEXT_PUBLIC_APP_URL!,
   emailAndPassword: {
