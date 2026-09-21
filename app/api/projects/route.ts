@@ -1,60 +1,34 @@
-import { cookies } from 'next/headers'
-import { createServerClient } from '@supabase/ssr'
-
-function makeSupabase(cookieStore: Awaited<ReturnType<typeof cookies>>) {
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll: () => cookieStore.getAll(),
-        setAll: (cookiesToSet) => {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
-}
+import { auth } from '@/lib/auth'
+import { getDb } from '@/lib/mongodb'
+import { headers } from 'next/headers'
 
 export async function GET() {
-  const cookieStore = await cookies()
-  const supabase = makeSupabase(cookieStore)
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = session.user.id
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const db = await getDb()
+  const docs = await db
+    .collection('projects')
+    .find({ userId }, { projection: { _id: 1, name: 1, createdAt: 1 } })
+    .sort({ updatedAt: -1 })
+    .toArray()
 
-  const { data, error } = await supabase
-    .from('projects')
-    .select('id, name, created_at')
-    .order('updated_at', { ascending: false })
-
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 })
-  }
-
-  const projects = (data ?? []).map(p => ({
-    id: p.id,
+  const projects = docs.map(p => ({
+    id: p._id as string,
     name: p.name,
-    createdAt: new Date(p.created_at).getTime(),
+    createdAt: new Date(p.createdAt).getTime(),
   }))
 
   return Response.json({ projects })
 }
 
 export async function POST(request: Request) {
-  const cookieStore = await cookies()
-  const supabase = makeSupabase(cookieStore)
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
+  const userId = session.user.id
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const body = await request.json() as {
+  const { projectId, name, metadata, sources } = await request.json() as {
     projectId: string
     name: string
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,34 +36,34 @@ export async function POST(request: Request) {
     sources: Array<{ id: string; name: string; duration: number; s3Key: string }>
   }
 
-  const { projectId, name, metadata, sources } = body
   if (!projectId || !name) {
     return Response.json({ error: 'projectId and name are required' }, { status: 400 })
   }
 
-  // Insert project row
-  const { error: projectErr } = await supabase
-    .from('projects')
-    .insert({ id: projectId, user_id: user.id, name, metadata })
+  const db = await getDb()
+  const now = new Date()
 
-  if (projectErr) {
-    return Response.json({ error: projectErr.message }, { status: 500 })
-  }
+  await db.collection('projects').insertOne({
+    _id: projectId as unknown as string,
+    userId,
+    name,
+    metadata,
+    createdAt: now,
+    updatedAt: now,
+  })
 
-  // Insert source rows
   if (sources?.length) {
-    const rows = sources.map(s => ({
-      id: s.id,
-      project_id: projectId,
-      user_id: user.id,
-      name: s.name,
-      duration: s.duration,
-      s3_key: s.s3Key,
-    }))
-    const { error: sourcesErr } = await supabase.from('sources').insert(rows)
-    if (sourcesErr) {
-      return Response.json({ error: sourcesErr.message }, { status: 500 })
-    }
+    await db.collection('sources').insertMany(
+      sources.map(s => ({
+        _id: s.id as unknown as string,
+        projectId,
+        userId,
+        name: s.name,
+        duration: s.duration,
+        s3Key: s.s3Key,
+        createdAt: now,
+      }))
+    )
   }
 
   return Response.json({ ok: true })

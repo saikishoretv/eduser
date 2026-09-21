@@ -1,56 +1,28 @@
-import { cookies } from 'next/headers'
-import { createServerClient } from '@supabase/ssr'
+import { auth } from '@/lib/auth'
+import { getDb } from '@/lib/mongodb'
 import { deleteFile } from '@/lib/s3'
-
-async function makeSupabase() {
-  const cookieStore = await cookies()
-  return createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
-    {
-      cookies: {
-        getAll: () => cookieStore.getAll(),
-        setAll: (cookiesToSet) => {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
-          )
-        },
-      },
-    }
-  )
-}
+import { headers } from 'next/headers'
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const supabase = await makeSupabase()
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  const { data, error } = await supabase
-    .from('projects')
-    .select('id, name, created_at, metadata')
-    .eq('id', id)
-    .eq('user_id', user.id)
-    .single()
-
-  if (error || !data) {
-    return Response.json({ error: 'Project not found' }, { status: 404 })
-  }
+  const db = await getDb()
+  const doc = await db.collection('projects').findOne({ _id: id as unknown as string, userId: session.user.id })
+  if (!doc) return Response.json({ error: 'Project not found' }, { status: 404 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const meta = (data.metadata ?? {}) as Record<string, any>
+  const meta = (doc.metadata ?? {}) as Record<string, any>
 
   return Response.json({
     project: {
-      id: data.id,
-      name: data.name,
-      createdAt: new Date(data.created_at).getTime(),
+      id: doc._id,
+      name: doc.name,
+      createdAt: new Date(doc.createdAt).getTime(),
       clips:         meta.clips         ?? [],
       sources:       meta.sources       ?? [],
       audioLayers:   meta.audioLayers   ?? [],
@@ -64,31 +36,24 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const supabase = await makeSupabase()
-
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const { metadata, name } = await request.json() as { metadata: Record<string, any>; name?: string }
-  if (!metadata) {
-    return Response.json({ error: 'metadata is required' }, { status: 400 })
-  }
+  if (!metadata) return Response.json({ error: 'metadata is required' }, { status: 400 })
 
-  const patch: Record<string, unknown> = { metadata }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const patch: Record<string, any> = { metadata, updatedAt: new Date() }
   if (name) patch.name = name
 
-  const { error } = await supabase
-    .from('projects')
-    .update(patch)
-    .eq('id', id)
-    .eq('user_id', user.id)
+  const db = await getDb()
+  const result = await db.collection('projects').updateOne(
+    { _id: id as unknown as string, userId: session.user.id },
+    { $set: patch }
+  )
 
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 })
-  }
+  if (result.matchedCount === 0) return Response.json({ error: 'Project not found' }, { status: 404 })
 
   return Response.json({ ok: true })
 }
@@ -98,34 +63,22 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params
-  const supabase = await makeSupabase()
+  const session = await auth.api.getSession({ headers: await headers() })
+  if (!session) return Response.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return Response.json({ error: 'Unauthorized' }, { status: 401 })
-  }
+  const db = await getDb()
 
-  // Collect S3 keys from the sources table before deleting
-  const { data: sources } = await supabase
-    .from('sources')
-    .select('s3_key')
-    .eq('project_id', id)
-    .eq('user_id', user.id)
+  // Collect S3 keys before deleting
+  const sources = await db.collection('sources').find(
+    { projectId: id, userId: session.user.id },
+    { projection: { s3Key: 1 } }
+  ).toArray()
 
-  // Delete project row — FK cascade removes sources rows automatically
-  const { error } = await supabase
-    .from('projects')
-    .delete()
-    .eq('id', id)
-    .eq('user_id', user.id)
+  await db.collection('projects').deleteOne({ _id: id as unknown as string, userId: session.user.id })
+  await db.collection('sources').deleteMany({ projectId: id })
 
-  if (error) {
-    return Response.json({ error: error.message }, { status: 500 })
-  }
-
-  // Clean up S3 after DB delete succeeds (fire-and-forget from server)
-  if (sources?.length) {
-    await Promise.allSettled(sources.map(s => deleteFile(s.s3_key)))
+  if (sources.length) {
+    await Promise.allSettled(sources.map(s => deleteFile(s.s3Key)))
   }
 
   return Response.json({ ok: true })

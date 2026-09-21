@@ -1,12 +1,11 @@
 'use client'
 
-import { useRef, useState, useEffect } from 'react'
+import { useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import { SourceVideo } from '@/types'
-import { getSupabase } from '@/lib/supabase'
+import { signOut, useSession } from '@/lib/auth-client'
 import { saveBlob } from '@/lib/db'
-import type { User, Session, AuthChangeEvent } from '@supabase/supabase-js'
 
 function formatDuration(seconds: number): string {
   if (!isFinite(seconds)) return '0:00'
@@ -30,21 +29,14 @@ export default function ListingPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [loadingLabel, setLoadingLabel] = useState('Loading…')
-  const [user, setUser] = useState<User | null>(null)
+  const { data: session } = useSession()
+  const user = session?.user ?? null
   const [dbProjects, setDbProjects] = useState<Array<{ id: string; name: string; createdAt: number }>>([])
   const [dbLoaded, setDbLoaded] = useState(false)
 
   const projects = useEditorStore(s => s.projects)
   const createProject = useEditorStore(s => s.createProject)
   const deleteProject = useEditorStore(s => s.deleteProject)
-
-  useEffect(() => {
-    getSupabase().auth.getSession().then((res: { data: { session: Session | null } }) => setUser(res.data.session?.user ?? null))
-    const { data: { subscription } } = getSupabase().auth.onAuthStateChange((_: AuthChangeEvent, session: Session | null) => {
-      setUser(session?.user ?? null)
-    })
-    return () => subscription.unsubscribe()
-  }, [])
 
   // Load project list from DB — shows projects from other devices not yet in local store
   useEffect(() => {
@@ -56,7 +48,7 @@ export default function ListingPage() {
   }, [])
 
   async function handleSignOut() {
-    await getSupabase().auth.signOut()
+    await signOut()
     router.push('/login')
   }
 
