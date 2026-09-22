@@ -57,18 +57,29 @@ export default function Timeline() {
   const setZoom         = useEditorStore(s => s.setZoom)
   const clipSpeeds      = useEditorStore(s => s.clipSpeeds)
 
-  // Auto-fit zoom: set once per project so the timeline fills 90% of the container width
+  // Restore zoom from localStorage or auto-fit to 90% of container width (once per project)
   const zoomFitProjectRef = useRef<string | null>(null)
   useEffect(() => {
     if (zoomFitProjectRef.current === activeProjectId) return
     if (!scrollRef.current || !activeProjectId) return
     const width = scrollRef.current.clientWidth
     if (width === 0) return
-    const timings = getClipTimings(clips, clipSpeeds)
-    const duration = timings.length > 0 ? timings[timings.length - 1].end : MIN_DURATION
     zoomFitProjectRef.current = activeProjectId
-    setZoom((width * 0.9) / duration)
+    const saved = localStorage.getItem(`clipr-zoom-${activeProjectId}`)
+    if (saved !== null) {
+      setZoom(parseFloat(saved))
+    } else {
+      const timings = getClipTimings(clips, clipSpeeds)
+      const duration = timings.length > 0 ? timings[timings.length - 1].end : MIN_DURATION
+      setZoom((width * 0.9) / duration)
+    }
   }, [activeProjectId, clips, clipSpeeds, setZoom])
+
+  // Persist zoom to localStorage whenever it changes (skip before project is initialized)
+  useEffect(() => {
+    if (zoomFitProjectRef.current !== activeProjectId || !activeProjectId) return
+    localStorage.setItem(`clipr-zoom-${activeProjectId}`, String(zoom))
+  }, [zoom, activeProjectId])
 
   const timings = getClipTimings(clips, clipSpeeds)
   const clipsDuration   = timings.length > 0 ? timings[timings.length - 1].end : 0
