@@ -312,7 +312,7 @@ export default function Toolbar() {
   if (selectedOverlay) {
     const ol = selectedOverlay
     return (
-      <div className="flex items-center gap-2 px-3 py-2 border-y border-neutral-800 bg-neutral-900 shrink-0 overflow-x-auto">
+      <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-y border-neutral-800 bg-neutral-900 shrink-0">
         <button
           onClick={() => setSelectedOverlayId(null)}
           className="flex items-center gap-1 px-2 py-1 rounded text-xs text-neutral-400 hover:text-white hover:bg-neutral-700 transition-colors shrink-0"
@@ -572,7 +572,7 @@ export default function Toolbar() {
 
   // ── Normal mode ─────────────────────────────────────────────────────────────
   return (
-    <div className="flex items-center gap-px px-3 py-2 border-y border-neutral-800 bg-neutral-900 shrink-0">
+    <div className="flex flex-wrap items-center gap-px px-3 py-2 border-y border-neutral-800 bg-neutral-900 shrink-0">
       {actions.map(({ label, hint, fn, enabled }) => (
         <button
           key={label}
