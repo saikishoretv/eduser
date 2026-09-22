@@ -147,11 +147,18 @@ export default function ListingPage() {
             </>
           )}
           <button
+            onClick={() => router.push('/record')}
+            disabled={loading}
+            className="border border-neutral-700 hover:border-neutral-500 disabled:opacity-50 text-neutral-300 hover:text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            + New Walkthrough
+          </button>
+          <button
             onClick={() => fileInputRef.current?.click()}
             disabled={loading}
             className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
           >
-            {loading ? loadingLabel : '+ New Project'}
+            {loading ? loadingLabel : '+ Upload Video'}
           </button>
         </div>
         <input

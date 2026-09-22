@@ -24,6 +24,7 @@ function buildMetadata(s: StoreState, projectId: string): Record<string, unknown
     overlayLayers: (project.overlayLayers ?? []).map(ol =>
       ol.type === 'image' ? { ...ol, objectUrl: '' } : ol
     ),
+    steps: project.steps,
     clipCrops:               pick(s.clipCrops),
     clipZooms:               pick(s.clipZooms),
     clipZoomPresets:         pick(s.clipZoomPresets),

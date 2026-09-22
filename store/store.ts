@@ -68,6 +68,7 @@ interface EditorStore {
     standardSubtitleAppearance?: StandardSubtitleAppearance
     outputFormat?: FormatPreset | null
   }) => void
+  setStepDescription: (projectId: string, stepId: string, description: string) => void
   setActiveProject: (id: string) => void
   setSourceObjectUrl: (sourceId: string, objectUrl: string) => void
   setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[], detectedLanguage?: string) => void
@@ -224,6 +225,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           id: data.id, name: data.name, createdAt: data.createdAt,
           clips: data.clips, sources: data.sources,
           audioLayers: data.audioLayers, overlayLayers: data.overlayLayers,
+          steps: data.steps,
         }
         return {
           projects: s.projects.some(p => p.id === project.id)
@@ -256,6 +258,17 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           activeProjectId: s.activeProjectId === id ? null : s.activeProjectId,
         }))
       },
+
+      setStepDescription: (projectId, stepId, description) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id !== projectId ? p : {
+            ...p,
+            steps: (p.steps ?? []).map(st =>
+              st.id === stepId ? { ...st, description } : st
+            ),
+          }
+        ),
+      })),
 
       setActiveProject: (id) => {
         set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, playheadTime: 0, isPlaying: false })

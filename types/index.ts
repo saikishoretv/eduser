@@ -77,6 +77,14 @@ export interface OverlayLayer {
   borderWidth?: number  // px
 }
 
+export interface Step {
+  id: string
+  clipId: string       // references a Clip
+  sourceId: string     // references a SourceVideo
+  title: string
+  description: string
+}
+
 export interface Project {
   id: string
   name: string
@@ -85,4 +93,5 @@ export interface Project {
   sources: SourceVideo[]
   audioLayers: AudioLayer[]
   overlayLayers: OverlayLayer[]
+  steps?: Step[]       // present for walkthrough projects
 }

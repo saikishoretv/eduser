@@ -28,6 +28,7 @@ export async function GET(
       sources:       meta.sources       ?? [],
       audioLayers:   meta.audioLayers   ?? [],
       overlayLayers: meta.overlayLayers ?? [],
+      steps:         meta.steps         ?? undefined,
       clipCrops:               meta.clipCrops               ?? {},
       clipZooms:               meta.clipZooms               ?? {},
       clipZoomPresets:         meta.clipZoomPresets          ?? {},
