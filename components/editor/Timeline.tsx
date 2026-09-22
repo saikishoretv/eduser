@@ -1,6 +1,6 @@
 'use client'
 
-import { useRef, useCallback, useState } from 'react'
+import { useRef, useCallback, useState, useEffect } from 'react'
 import { useEditorStore } from '@/store/store'
 import { getClipTimings, formatTime } from '@/lib/clipUtils'
 import { saveBlob } from '@/lib/db'
@@ -35,6 +35,7 @@ export default function Timeline() {
   const [addingImg, setAddingImg] = useState(false)
   const [addingClip, setAddingClip] = useState(false)
 
+  const activeProjectId = useEditorStore(s => s.activeProjectId)
   const clips         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
   const audioLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_AUDIO_LAYERS)
   const overlayLayers = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.overlayLayers ?? EMPTY_OVERLAY_LAYERS)
@@ -55,6 +56,19 @@ export default function Timeline() {
   const addSourceToProject   = useEditorStore(s => s.addSourceToProject)
   const setZoom         = useEditorStore(s => s.setZoom)
   const clipSpeeds      = useEditorStore(s => s.clipSpeeds)
+
+  // Auto-fit zoom: set once per project so the timeline fills 90% of the container width
+  const zoomFitProjectRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (zoomFitProjectRef.current === activeProjectId) return
+    if (!scrollRef.current || !activeProjectId) return
+    const width = scrollRef.current.clientWidth
+    if (width === 0) return
+    const timings = getClipTimings(clips, clipSpeeds)
+    const duration = timings.length > 0 ? timings[timings.length - 1].end : MIN_DURATION
+    zoomFitProjectRef.current = activeProjectId
+    setZoom((width * 0.9) / duration)
+  }, [activeProjectId, clips, clipSpeeds, setZoom])
 
   const timings = getClipTimings(clips, clipSpeeds)
   const clipsDuration   = timings.length > 0 ? timings[timings.length - 1].end : 0
