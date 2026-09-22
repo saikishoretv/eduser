@@ -743,7 +743,9 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const trimLabel = `[trim${i}]`
 
       let scaleAndCrop = ''
-      if (outputFormat) {
+      if (outputFormat || zoom !== 1) {
+        // Cover + crop: scale up to zoomed dimensions then crop to output size.
+        // Used for all format-specific outputs and whenever zoom > 1 (even in original-format mode).
         const zoomedW = Math.ceil(outW * zoom)
         const zoomedH = Math.ceil(outH * zoom)
         const evenZW = zoomedW % 2 === 0 ? zoomedW : zoomedW + 1
@@ -752,6 +754,7 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
         const cropY = `(${evenZH}-${outH})*${(crop.y / 100).toFixed(4)}`
         scaleAndCrop = `,scale=${evenZW}:${evenZH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}:${cropX}:${cropY}`
       } else {
+        // No format selected, no zoom: contain + letterbox/pillarbox to preserve source aspect ratio.
         scaleAndCrop = `,scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2`
       }
 
