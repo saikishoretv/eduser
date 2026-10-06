@@ -5,7 +5,88 @@ import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import { SourceVideo } from '@/types'
 import { signOut, useSession } from '@/lib/auth-client'
-import { saveBlob } from '@/lib/db'
+
+const TIPS = [
+  'Trim clips by dragging their edges in the timeline.',
+  'Press F to insert a freeze frame at the current playhead position.',
+  'Add background music or voiceover using the audio track in the timeline.',
+  'Use Ken Burns or Punch zoom presets to add motion to static clips.',
+  'Generate automatic subtitles by clicking Transcribe in the toolbar.',
+  'Export in different aspect ratios — perfect for social media.',
+  'Use color correction to fine-tune brightness, contrast, and saturation.',
+  'Add text or image overlays to annotate your video.',
+  'Drag clips in the timeline to reorder them at any time.',
+  'Use the speed control to create slow-motion or time-lapse effects.',
+]
+
+function UploadModal({ stage, progress }: { stage: string; progress: number }) {
+  const [tipIdx, setTipIdx] = useState(0)
+  const [fade, setFade] = useState(true)
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setFade(false)
+      setTimeout(() => {
+        setTipIdx(i => (i + 1) % TIPS.length)
+        setFade(true)
+      }, 400)
+    }, 8000)
+    return () => clearInterval(interval)
+  }, [])
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+      <div className="bg-neutral-900 border border-neutral-800 rounded-2xl p-8 w-full max-w-sm mx-4 flex flex-col items-center gap-6">
+        {/* Spinner + stage */}
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-10 h-10 rounded-full border-2 border-neutral-700 border-t-blue-500 animate-spin" />
+          <p className="text-neutral-300 text-sm font-medium">{stage}</p>
+        </div>
+
+        {/* Progress bar */}
+        <div className="w-full">
+          <div className="flex justify-between text-xs text-neutral-500 mb-1.5">
+            <span>Uploading</span>
+            <span>{progress}%</span>
+          </div>
+          <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Rotating tip */}
+        <div className="w-full rounded-xl bg-neutral-800/60 px-4 py-3 min-h-[64px] flex items-center">
+          <p
+            className="text-xs text-neutral-400 leading-relaxed transition-opacity duration-400"
+            style={{ opacity: fade ? 1 : 0 }}
+          >
+            <span className="text-neutral-500 font-medium mr-1">Tip:</span>
+            {TIPS[tipIdx]}
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+async function uploadWithProgress(url: string, file: File, contentType: string, onProgress: (pct: number) => void): Promise<void> {
+  // Simulate progress while fetch uploads (fetch has no native progress API)
+  let simulated = 0
+  const interval = setInterval(() => {
+    simulated = Math.min(simulated + Math.random() * 8 + 2, 90)
+    onProgress(Math.round(simulated))
+  }, 400)
+  try {
+    const res = await fetch(url, { method: 'PUT', body: file, headers: { 'Content-Type': contentType } })
+    if (!res.ok) throw new Error(`Upload failed: ${res.status}`)
+    onProgress(100)
+  } finally {
+    clearInterval(interval)
+  }
+}
 
 function formatDuration(seconds: number): string {
   if (!isFinite(seconds)) return '0:00'
@@ -14,11 +95,16 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`
 }
 
-function getVideoMetadata(url: string): Promise<{ duration: number; width: number; height: number }> {
+function getVideoMetadata(url: string): Promise<{ duration: number; width: number; height: number; hasAudio: boolean }> {
   return new Promise((resolve, reject) => {
     const v = document.createElement('video')
     v.preload = 'metadata'
-    v.onloadedmetadata = () => resolve({ duration: v.duration, width: v.videoWidth, height: v.videoHeight })
+    v.onloadedmetadata = () => resolve({
+      duration: v.duration,
+      width: v.videoWidth,
+      height: v.videoHeight,
+      hasAudio: (v.audioTracks?.length ?? 0) > 0,
+    })
     v.onerror = reject
     v.src = url
   })
@@ -29,6 +115,7 @@ export default function ListingPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
   const [loadingLabel, setLoadingLabel] = useState('Loading…')
+  const [uploadProgress, setUploadProgress] = useState(0)
   const { data: session } = useSession()
   const user = session?.user ?? null
   const [dbProjects, setDbProjects] = useState<Array<{ id: string; name: string; createdAt: number; duration: number }>>([])
@@ -36,6 +123,7 @@ export default function ListingPage() {
 
   const createProject = useEditorStore(s => s.createProject)
   const deleteProject = useEditorStore(s => s.deleteProject)
+  const storeProjects = useEditorStore(s => s.projects)
 
   // Load project list from DB — shows projects from other devices not yet in local store
   useEffect(() => {
@@ -62,13 +150,13 @@ export default function ListingPage() {
     const file = e.target.files?.[0]
     if (!file) return
     setLoading(true)
-    setLoadingLabel('Loading…')
+    setLoadingLabel('Preparing…')
+    setUploadProgress(0)
     try {
       const objectUrl = URL.createObjectURL(file)
-      const { duration, width, height } = await getVideoMetadata(objectUrl)
+      const { duration, width, height, hasAudio } = await getVideoMetadata(objectUrl)
       const sourceId = crypto.randomUUID()
 
-      // Get a presigned S3 URL and upload the file
       setLoadingLabel('Uploading…')
       const urlRes = await fetch('/api/sources/upload-url', {
         method: 'POST',
@@ -78,11 +166,7 @@ export default function ListingPage() {
       if (!urlRes.ok) throw new Error('Failed to get upload URL')
       const { uploadUrl, s3Key } = await urlRes.json()
 
-      const [uploadRes] = await Promise.all([
-        fetch(uploadUrl, { method: 'PUT', body: file, headers: { 'Content-Type': file.type } }),
-        saveBlob(sourceId, file),  // cache locally so reloads don't need S3
-      ])
-      if (!uploadRes.ok) throw new Error('S3 upload failed')
+      await uploadWithProgress(uploadUrl, file, file.type, setUploadProgress)
 
       const source: SourceVideo = {
         id: sourceId,
@@ -90,6 +174,7 @@ export default function ListingPage() {
         duration,
         width,
         height,
+        hasAudio,
         objectUrl,
         s3Key,
       }
@@ -102,6 +187,7 @@ export default function ListingPage() {
         sources: newProject.sources.map(s => ({ ...s, objectUrl: '' })),
         audioLayers: [],
         overlayLayers: [],
+        steps: newProject.steps,
       }
       fetch('/api/projects', {
         method: 'POST',
@@ -131,8 +217,9 @@ export default function ListingPage() {
 
   return (
     <div className="min-h-screen bg-neutral-950">
+      {loading && <UploadModal stage={loadingLabel} progress={uploadProgress} />}
       <header className="border-b border-neutral-800 px-6 py-4 flex items-center justify-between">
-        <span className="text-white font-semibold tracking-tight">Clipr</span>
+        <span className="text-white font-semibold tracking-tight">Eduser</span>
         <div className="flex items-center gap-3">
           {user && (
             <>
@@ -158,7 +245,7 @@ export default function ListingPage() {
             disabled={loading}
             className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
           >
-            {loading ? loadingLabel : '+ Upload Video'}
+            + Upload Video
           </button>
         </div>
         <input
@@ -204,7 +291,7 @@ export default function ListingPage() {
                     </svg>
                   </div>
                   <div className="p-3">
-                    <p className="text-sm font-medium text-neutral-100 truncate">{project.name}</p>
+                    <p className="text-sm font-medium text-neutral-100 truncate">{storeProjects.find(p => p.id === project.id)?.name ?? project.name}</p>
                     <div className="flex items-center justify-between mt-1">
                       <span className="text-xs text-neutral-500">{formatDuration(project.duration)}</span>
                       <button

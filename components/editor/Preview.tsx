@@ -106,16 +106,25 @@ const EMPTY_OVERLAY_LAYERS: import('@/types').OverlayLayer[] = []
 
 export default function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null)
+  const imgRef   = useRef<HTMLImageElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const transitionOverlayRef = useRef<HTMLDivElement>(null)
   const activeClipIdxRef = useRef<number>(0)
   const lastSyncRef = useRef<number>(0)
   const animRafRef = useRef<number>(0)
+  const imageClipWallStartRef     = useRef<number>(0)
+  const imageClipPlayheadStartRef = useRef<number>(0)
   const dragRef = useRef<{ startX: number; startY: number; cropX: number; cropY: number; clipId: string } | null>(null)
   const overlayDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; id: string } | null>(null)
 
   const clips       = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
   const sources     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.sources ?? EMPTY_SOURCES)
+  const sourcesReady = useEditorStore(s => {
+    const project = s.projects.find(p => p.id === s.activeProjectId)
+    if (!project?.sources.length) return true
+    // A source is ready if it has an objectUrl, OR if it has no s3Key (can't be fetched — e.g. freeze frames after reload)
+    return project.sources.every(src => !!src.objectUrl || !src.s3Key)
+  })
   const audioLayers = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_AUDIO_LAYERS)
   const overlayLayers = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.overlayLayers ?? EMPTY_OVERLAY_LAYERS)
   const selectedOverlayId = useEditorStore(s => s.selectedOverlayId)
@@ -140,6 +149,9 @@ export default function Preview() {
   const setPlaying = useEditorStore(s => s.setPlaying)
   const setClipCrop = useEditorStore(s => s.setClipCrop)
   const pushUndo    = useEditorStore(s => s.pushUndo)
+  const pendingFreezeFrame  = useEditorStore(s => s.pendingFreezeFrame)
+  const executeFreezeFrame  = useEditorStore(s => s.executeFreezeFrame)
+  const cancelFreezeFrame   = useEditorStore(s => s.cancelFreezeFrame)
 
   const timings = getClipTimings(clips, clipSpeeds)
   const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
@@ -151,12 +163,19 @@ export default function Preview() {
     timings[timings.length - 1] ??
     null
   const activeClipId = activeTiming?.clip.id ?? null
+  const activeClipBackground = activeTiming?.clip.background ?? null
   const currentCrop = activeClipId ? (clipCrops[activeClipId] ?? { x: 50, y: 50 }) : { x: 50, y: 50 }
 
   // Subtitles: map current timeline time → source time → active transcript segment
   const activeSource = activeTiming
     ? sources.find(s => s.id === activeTiming.clip.sourceId)
     : null
+
+  // Reactive display flags — these drive show/hide for <video> and <img> so
+  // React's reconciler is always the source of truth (avoids conflict with imperative applyClip mutations)
+  const isImageClip      = !!activeSource?.isImage
+  const isBackgroundClip = !!activeClipBackground
+  console.log('[render] isImageClip:', isImageClip, 'ph:', playheadTime.toFixed(2), 'src:', activeSource?.id, 'objUrl:', activeSource?.objectUrl?.slice(0,30))
   const currentSourceTime = activeTiming
     ? activeTiming.clip.trimStart + ((previewTime ?? playheadTime) - activeTiming.start) * (clipSpeeds[activeTiming.clip.id] ?? 1)
     : 0
@@ -176,6 +195,10 @@ export default function Preview() {
   const windowStart = Math.max(0, anchorIdx - 1)
   const windowEnd = Math.min(words.length, windowStart + 4)
   const displayWords = words.slice(windowStart, windowEnd)
+
+  // Mutable ref so RAF/timeupdate always see the latest sources without re-registering effects
+  const sourcesRef = useRef(sources)
+  sourcesRef.current = sources
 
   // Audio layer elements — managed imperatively so the RAF/timeupdate callbacks don't need to re-register
   const audioLayersRef    = useRef(audioLayers)
@@ -221,6 +244,28 @@ export default function Preview() {
     }
   }, [audioLayers])
 
+  // Freeze frame capture — fires when Toolbar/keyboard sets pendingFreezeFrame
+  useEffect(() => {
+    if (!pendingFreezeFrame) return
+    const video = videoRef.current
+    console.log('[freeze] capture. video:', !!video, 'videoWidth:', video?.videoWidth)
+    if (!video || !video.videoWidth) { cancelFreezeFrame(); return }
+    const canvas = document.createElement('canvas')
+    canvas.width = video.videoWidth
+    canvas.height = video.videoHeight
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { cancelFreezeFrame(); return }
+    ctx.drawImage(video, 0, 0)
+    canvas.toBlob(blob => {
+      console.log('[freeze] toBlob:', blob?.size, 'bytes')
+      if (!blob) { cancelFreezeFrame(); return }
+      const sourceId = crypto.randomUUID()
+      const objectUrl = URL.createObjectURL(blob)
+      console.log('[freeze] executeFreezeFrame. objectUrl:', objectUrl)
+      executeFreezeFrame(sourceId, objectUrl, canvas.width, canvas.height)
+    }, 'image/jpeg', 0.95)
+  }, [pendingFreezeFrame]) // eslint-disable-line react-hooks/exhaustive-deps
+
   function syncAudioToTime(t: number, play: boolean) {
     for (const layer of audioLayersRef.current) {
       const el = audioElementsRef.current.get(layer.id)
@@ -251,9 +296,20 @@ export default function Preview() {
     if (!video) return
     const timing = timingsRef.current[clipIdx]
     if (!timing) return
-    const source = sources.find(s => s.id === timing.clip.sourceId)
-    if (!source) return
     activeClipIdxRef.current = clipIdx
+    if (timing.clip.background) {
+      if (video.src) video.src = ''
+      return
+    }
+    const source = sourcesRef.current.find(s => s.id === timing.clip.sourceId)
+    if (!source) return
+    if (source.isImage) {
+      console.log('[applyClip] image clip idx:', clipIdx, 'objectUrl:', source.objectUrl?.slice(0,30))
+      // Freeze frame — clear video src; img src and display are handled reactively
+      if (video.src) video.src = ''
+      return
+    }
+    // Normal video clip — display handled reactively; just set src/time
     if (video.src !== source.objectUrl) video.src = source.objectUrl
     video.currentTime = seekTo
     video.playbackRate = clipSpeedsRef.current[timing.clip.id] ?? 1
@@ -271,6 +327,16 @@ export default function Preview() {
     if (!timing) {
       video.style.transform = ''
       if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = '0'
+      return
+    }
+    // For image/background clips, skip video-specific state and reset overlays
+    const source = timing.clip.background ? null : sourcesRef.current.find(s => s.id === timing.clip.sourceId)
+    if (source?.isImage || timing.clip.background) {
+      applyClip(timing.index, 0)
+      activeClipIdxRef.current = timing.index
+      video.style.transform = ''
+      if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = '0'
+      syncAudioToTime(t, false)
       return
     }
     applyClip(timing.index, timing.clip.trimStart + (t - timing.start))
@@ -292,7 +358,7 @@ export default function Preview() {
     if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = String(fadeOpacity)
     syncAudioToTime(t, false)
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playheadTime, previewTime, isPlaying, clipKey, clipZooms, clipZoomPresets, clipCrops, clipTransitionDurations, clipTransitionIn, clipTransitionOut, clipColorCorrections, outputFormat])
+  }, [playheadTime, previewTime, isPlaying, clipKey, clipZooms, clipZoomPresets, clipCrops, clipTransitionDurations, clipTransitionIn, clipTransitionOut, clipColorCorrections, outputFormat, sourcesReady])
 
   // Reactively apply color filter when corrections change (e.g. while playing or panel open)
   useEffect(() => {
@@ -316,6 +382,41 @@ export default function Preview() {
       if (video && timing) {
         const { clip } = timing
         const dur = clip.trimEnd - clip.trimStart
+
+        // Image/background clip: advance via wall-clock
+        const src = sourcesRef.current.find(s => s.id === clip.sourceId)
+        if (src?.isImage || clip.background) {
+          const wallNow = performance.now()
+          const elapsed = (wallNow - imageClipWallStartRef.current) / 1000
+          const currentTimeline = imageClipPlayheadStartRef.current + elapsed
+          if (elapsed >= dur - 0.05) {
+            const nextTiming = timingsRef.current[activeClipIdxRef.current + 1]
+            if (nextTiming) {
+              applyClip(nextTiming.index, nextTiming.clip.trimStart)
+              imageClipWallStartRef.current = performance.now()
+              imageClipPlayheadStartRef.current = nextTiming.start
+              const nextSrc = sourcesRef.current.find(s => s.id === nextTiming.clip.sourceId)
+              if (nextSrc?.isImage || nextTiming.clip.background) {
+                if (transitionOverlayRef.current) transitionOverlayRef.current.style.opacity = '0'
+              } else {
+                video.play().catch(() => {})
+              }
+            } else {
+              setPlaying(false)
+              setPlayhead(totalDuration)
+            }
+          } else {
+            const now = performance.now()
+            if (now - lastSyncRef.current > 33) {
+              lastSyncRef.current = now
+              setPlayhead(currentTimeline)
+              syncAudioToTime(currentTimeline, true)
+            }
+          }
+          animRafRef.current = requestAnimationFrame(tick)
+          return
+        }
+
         if (dur > 0) {
           const p = Math.max(0, Math.min(1, (video.currentTime - clip.trimStart) / dur))
           const preset = clipZoomPresetsRef.current[clip.id] ?? 'none'
@@ -337,7 +438,7 @@ export default function Preview() {
     }
     animRafRef.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animRafRef.current)
-  }, [isPlaying])
+  }, [isPlaying, totalDuration]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Play / pause
   useEffect(() => {
@@ -345,8 +446,16 @@ export default function Preview() {
     if (!video) return
     if (isPlaying) {
       const timing = findTiming(playheadTime)
-      if (timing) applyClip(timing.index, timing.clip.trimStart + (playheadTime - timing.start))
-      video.play().catch(() => setPlaying(false))
+      if (timing) {
+        applyClip(timing.index, timing.clip.trimStart + (playheadTime - timing.start))
+        const source = timing.clip.background ? null : sourcesRef.current.find(s => s.id === timing.clip.sourceId)
+        if (source?.isImage || timing.clip.background) {
+          imageClipWallStartRef.current = performance.now()
+          imageClipPlayheadStartRef.current = playheadTime
+        } else {
+          video.play().catch(err => { if (err?.name !== 'AbortError') setPlaying(false) })
+        }
+      }
       syncAudioToTime(playheadTime, true)
     } else {
       video.pause()
@@ -367,8 +476,13 @@ export default function Preview() {
       if (!timing) return
       const { clip } = timing
 
+      // Image clips are driven by the RAF wall-clock loop, not video timeupdate
+      const src = sourcesRef.current.find(s => s.id === clip.sourceId)
+      if (src?.isImage || clip.background) return
+
       if (video.currentTime >= clip.trimEnd - 0.05) {
         const next = timings[idx + 1]
+        console.log('[onTimeUpdate] clip ended → next:', next?.clip.id, 'nextSrcId:', next?.clip.sourceId)
         if (next) {
           applyClip(next.index, next.clip.trimStart)
           // Apply next clip's initial (progress=0) visual state immediately; RAF will continue from there
@@ -379,7 +493,15 @@ export default function Preview() {
           const nextTransition = clipTransitionDurationsRef.current[next.clip.id] ?? 0.5
           const { scale, cropX, cropY } = calcAnimatedState(nextPreset, 0, nextZoom, nextCrop, nextTransition, nextDur)
           applyVideoState(video, scale, cropX, cropY, !!outputFormatRef.current)
-          video.play()
+          const nextSrc = sourcesRef.current.find(s => s.id === next.clip.sourceId)
+          if (nextSrc?.isImage || next.clip.background) {
+            imageClipWallStartRef.current = performance.now()
+            imageClipPlayheadStartRef.current = next.start
+            lastSyncRef.current = performance.now()
+            setPlayhead(next.start) // immediately update so isImageClip re-renders to true
+          } else {
+            video.play()
+          }
         } else {
           setPlaying(false)
           setPlayhead(totalDuration)
@@ -492,15 +614,39 @@ export default function Preview() {
               : { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }
             }
           >
+            {/* Background color/gradient clip fill */}
+            {activeClipBackground && (
+              <div className="absolute inset-0 z-0" style={{ background: activeClipBackground.value }} />
+            )}
             <video
               ref={videoRef}
               playsInline
+              crossOrigin="anonymous"
               className={outputFormat ? 'w-full h-full' : 'max-h-full max-w-full'}
-              style={outputFormat
-                ? { objectFit: 'cover', objectPosition: `${currentCrop.x}% ${currentCrop.y}%` }
-                : undefined
-              }
+              style={{
+                ...(outputFormat ? { objectFit: 'cover' as const, objectPosition: `${currentCrop.x}% ${currentCrop.y}%` } : undefined),
+                display: (isBackgroundClip || isImageClip) ? 'none' : '',
+              }}
             />
+            {/* Freeze frame / image clip — always mounted (like <video>) so display is instant;
+                hidden via display:none when not in an image clip to avoid mount-timing races */}
+            <img
+              ref={imgRef}
+              alt=""
+              src={activeSource?.isImage ? (activeSource.objectUrl || undefined) : undefined}
+              className="absolute inset-0 w-full h-full"
+              style={{
+                objectFit: outputFormat ? 'cover' : 'contain',
+                objectPosition: `${currentCrop.x}% ${currentCrop.y}%`,
+                display: (isImageClip && !!activeSource?.objectUrl) ? '' : 'none',
+              }}
+            />
+            {/* Loading spinner — shown until all sources have a resolved objectUrl */}
+            {!sourcesReady && (
+              <div className="absolute inset-0 flex items-center justify-center bg-black/50 z-30 pointer-events-none">
+                <div className="w-8 h-8 rounded-full border-2 border-neutral-600 border-t-white animate-spin" />
+              </div>
+            )}
             {/* Transition fade overlay — opacity driven imperatively by seek/RAF */}
             <div
               ref={transitionOverlayRef}

@@ -1,6 +1,6 @@
 import { auth } from '@/lib/auth'
 import { getDb } from '@/lib/mongodb'
-import { deleteFile } from '@/lib/s3'
+import { deleteFile, getDownloadUrl } from '@/lib/s3'
 import { headers } from 'next/headers'
 
 export async function GET(
@@ -19,16 +19,31 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const meta = (doc.metadata ?? {}) as Record<string, any>
 
+  // Pre-generate presigned download URLs so the client can stream immediately
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const sources = await Promise.all((meta.sources ?? []).map(async (src: any) => ({
+    ...src,
+    objectUrl: src.s3Key ? await getDownloadUrl(src.s3Key) : '',
+  })))
+
   return Response.json({
     project: {
       id: String(doc._id),
       name: doc.name as string,
       createdAt: new Date(doc.createdAt as string).getTime(),
       clips:         meta.clips         ?? [],
-      sources:       meta.sources       ?? [],
+      sources,
       audioLayers:   meta.audioLayers   ?? [],
       overlayLayers: meta.overlayLayers ?? [],
-      steps:         meta.steps         ?? undefined,
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      steps: meta.steps ?? (meta.clips ?? []).map((c: any, i: number) => ({
+        id: `${c.id}-step`,
+        clipId: c.id,
+        sourceId: c.sourceId,
+        title: c.name || `Step ${i + 1}`,
+        description: '',
+        timelinePosition: c.trimStart ?? 0,
+      })),
       clipCrops:               meta.clipCrops               ?? {},
       clipZooms:               meta.clipZooms               ?? {},
       clipZoomPresets:         meta.clipZoomPresets          ?? {},

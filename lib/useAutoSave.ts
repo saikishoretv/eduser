@@ -49,15 +49,15 @@ export function useAutoSave(projectId: string | null) {
     const unsubscribe = useEditorStore.subscribe((state) => {
       const metadata = buildMetadata(state, projectId)
       if (!metadata) return
+      const project = state.projects.find(p => p.id === projectId)
 
       // Skip ephemeral-only changes (playhead, selection, playback)
-      const snapshot = JSON.stringify(metadata)
+      const snapshot = JSON.stringify({ _name: project?.name, ...metadata })
       if (snapshot === lastSaveRef.current) return
 
       if (timerRef.current) clearTimeout(timerRef.current)
       timerRef.current = setTimeout(() => {
         lastSaveRef.current = snapshot
-        const project = state.projects.find(p => p.id === projectId)
         fetch(`/api/projects/${projectId}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
@@ -68,7 +68,21 @@ export function useAutoSave(projectId: string | null) {
 
     return () => {
       unsubscribe()
-      if (timerRef.current) clearTimeout(timerRef.current)
+      if (timerRef.current) {
+        clearTimeout(timerRef.current)
+        timerRef.current = null
+        // Flush pending save immediately on unmount (e.g. navigating away)
+        const state = useEditorStore.getState()
+        const metadata = buildMetadata(state, projectId)
+        const project = state.projects.find(p => p.id === projectId)
+        if (metadata) {
+          fetch(`/api/projects/${projectId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ metadata, name: project?.name }),
+          }).catch(console.error)
+        }
+      }
     }
   }, [projectId])
 }

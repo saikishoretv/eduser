@@ -1,8 +1,7 @@
 import { create } from 'zustand'
-import { Clip, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer } from '@/types'
+import { Clip, ClipBackground, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, Step } from '@/types'
 import { getClipTimings, getTotalDuration, canMerge, getSelectedIndices } from '@/lib/clipUtils'
 import { FormatPreset } from '@/lib/formats'
-import { deleteBlob } from '@/lib/db'
 import { SubtitleAppearance, SUBTITLE_DEFAULT, StandardSubtitleAppearance, STANDARD_SUBTITLE_DEFAULT } from '@/lib/subtitleTemplates'
 import { ColorCorrection, COLOR_CORRECTION_DEFAULT } from '@/lib/colorPresets'
 
@@ -52,6 +51,7 @@ interface EditorStore {
 
   createProject: (name: string, source: SourceVideo) => string
   addSourceToProject: (source: SourceVideo) => void
+  addBackgroundClip: (background: ClipBackground) => void
   renameProject: (id: string, name: string) => void
   deleteProject: (id: string) => void
   hydrateProject: (data: Project & {
@@ -69,6 +69,11 @@ interface EditorStore {
     outputFormat?: FormatPreset | null
   }) => void
   setStepDescription: (projectId: string, stepId: string, description: string) => void
+  updateStep: (projectId: string, stepId: string, patch: Partial<Pick<Step, 'title' | 'description' | 'timelinePosition'>>) => void
+  addStep: (projectId: string, step: Step) => void
+  removeStep: (projectId: string, stepId: string) => void
+  moveStep: (projectId: string, stepId: string, newPosition: number) => void
+  reorderSteps: (projectId: string, fromIndex: number, toIndex: number) => void
   setActiveProject: (id: string) => void
   setSourceObjectUrl: (sourceId: string, objectUrl: string) => void
   setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[], detectedLanguage?: string) => void
@@ -128,6 +133,13 @@ interface EditorStore {
   merge: () => void
   deleteSelected: () => void
 
+  reorderClips: (fromIndex: number, toIndex: number) => void
+
+  pendingFreezeFrame: boolean
+  requestFreezeFrame: () => void
+  cancelFreezeFrame: () => void
+  executeFreezeFrame: (sourceId: string, objectUrl: string, width: number, height: number) => void
+
   pushUndo: () => void
   undo: () => void
   redo: () => void
@@ -135,6 +147,56 @@ interface EditorStore {
 
 function uid(): string {
   return crypto.randomUUID()
+}
+
+// Split all video clips, audio layers, and overlays at a given timeline time.
+// Returns the mutated arrays; leaves segments alone if they don't span that time.
+function splitAllAtTime(
+  project: Project,
+  clipSpeeds: Record<string, number>,
+  time: number,
+): { clips: Clip[]; audioLayers: AudioLayer[]; overlayLayers: OverlayLayer[] } {
+  const timings = getClipTimings(project.clips, clipSpeeds)
+
+  let clips = [...project.clips]
+  for (const timing of timings) {
+    if (time <= timing.start + 0.01 || time >= timing.end - 0.01) continue
+    const { clip } = timing
+    const speed = clipSpeeds[clip.id] ?? 1
+    const splitPoint = clip.trimStart + (time - timing.start) * speed
+    if (splitPoint <= clip.trimStart + 0.01 || splitPoint >= clip.trimEnd - 0.01) continue
+    const first: Clip  = { ...clip, id: uid(), trimEnd: splitPoint }
+    const second: Clip = { ...clip, id: uid(), trimStart: splitPoint }
+    const idx = clips.findIndex(c => c.id === clip.id)
+    clips = [...clips.slice(0, idx), first, second, ...clips.slice(idx + 1)]
+  }
+
+  const audioLayers: AudioLayer[] = []
+  for (const layer of project.audioLayers ?? []) {
+    const layerEnd = layer.startAt + (layer.trimEnd - layer.trimStart)
+    if (time <= layer.startAt + 0.01 || time >= layerEnd - 0.01) { audioLayers.push(layer); continue }
+    const splitSrc = layer.trimStart + (time - layer.startAt)
+    if (splitSrc <= layer.trimStart + 0.01 || splitSrc >= layer.trimEnd - 0.01) { audioLayers.push(layer); continue }
+    audioLayers.push(
+      { ...layer, id: uid(), trimEnd: splitSrc },
+      { ...layer, id: uid(), trimStart: splitSrc, startAt: time },
+    )
+  }
+
+  const overlayLayers: OverlayLayer[] = []
+  for (const ol of project.overlayLayers ?? []) {
+    const olEnd = ol.startAt + ol.duration
+    if (time <= ol.startAt + 0.01 || time >= olEnd - 0.01) { overlayLayers.push(ol); continue }
+    const firstDur  = time - ol.startAt
+    const secondDur = olEnd - time
+    if (firstDur < 0.05 || secondDur < 0.05) { overlayLayers.push(ol); continue }
+    overlayLayers.push(
+      { ...ol, id: uid(), duration: firstDur },
+      { ...ol, id: uid(), startAt: time, duration: secondDur },
+    )
+  }
+
+  return { clips, audioLayers, overlayLayers }
 }
 
 function activeProject(s: EditorStore): Project | undefined {
@@ -188,6 +250,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       clipTransitionOut: {},
       clipColorCorrections: {},
       clipSpeeds: {},
+      pendingFreezeFrame: false,
       subtitleStyle: 'off' as SubtitleStyle,
       subtitleAppearance: SUBTITLE_DEFAULT,
       standardSubtitleAppearance: STANDARD_SUBTITLE_DEFAULT,
@@ -196,8 +259,10 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
 
       createProject: (name, source) => {
         const id = uid()
-        const clip: Clip = { id: uid(), sourceId: source.id, name: source.name, trimStart: 0, trimEnd: source.duration }
-        const project: Project = { id, name, createdAt: Date.now(), clips: [clip], sources: [source], audioLayers: [], overlayLayers: [] }
+        const clipId = uid()
+        const clip: Clip = { id: clipId, sourceId: source.id, name: source.name, trimStart: 0, trimEnd: source.duration }
+        const step: Step = { id: uid(), clipId, sourceId: source.id, title: name, description: '', timelinePosition: 0 }
+        const project: Project = { id, name, createdAt: Date.now(), clips: [clip], sources: [source], audioLayers: [], overlayLayers: [], steps: [step] }
         set(s => ({ projects: [...s.projects, project] }))
         return id
       },
@@ -216,6 +281,16 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
               ? { ...p, sources: [...p.sources, source], clips: [...p.clips, clip] }
               : p
           ),
+          ...withUndo(s),
+        }
+      }),
+
+      addBackgroundClip: (background) => set(s => {
+        const project = activeProject(s)
+        if (!project) return s
+        const clip: Clip = { id: uid(), sourceId: '', name: 'Background', trimStart: 0, trimEnd: 3, background }
+        return {
+          projects: replaceClips(s.projects, project.id, [...project.clips, clip]),
           ...withUndo(s),
         }
       }),
@@ -247,12 +322,6 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       }),
 
       deleteProject: (id) => {
-        const project = get().projects.find(p => p.id === id)
-        if (project) {
-          project.sources.forEach(s => deleteBlob(s.id).catch(() => {}))
-          project.audioLayers?.forEach(al => deleteBlob(al.blobId ?? al.id).catch(() => {}))
-          project.overlayLayers?.forEach(ol => { if (ol.blobId) deleteBlob(ol.blobId).catch(() => {}) })
-        }
         set(s => ({
           projects: s.projects.filter(p => p.id !== id),
           activeProjectId: s.activeProjectId === id ? null : s.activeProjectId,
@@ -269,6 +338,137 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           }
         ),
       })),
+
+      updateStep: (projectId, stepId, patch) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id !== projectId ? p : {
+            ...p,
+            steps: (p.steps ?? []).map(st =>
+              st.id === stepId ? { ...st, ...patch } : st
+            ),
+          }
+        ),
+      })),
+
+      addStep: (projectId, step) => set(s => {
+        const project = s.projects.find(p => p.id === projectId)
+        if (!project) return s
+        if ((project.steps ?? []).length >= 20) return s
+
+        const time = step.timelinePosition
+        const newSteps = [...(project.steps ?? []), step].sort((a, b) =>
+          (a.timelinePosition ?? 0) - (b.timelinePosition ?? 0)
+        )
+
+        if (time === undefined) {
+          return { projects: s.projects.map(p => p.id === projectId ? { ...p, steps: newSteps } : p) }
+        }
+
+        const { clips, audioLayers, overlayLayers } = splitAllAtTime(project, s.clipSpeeds, time)
+        return {
+          projects: s.projects.map(p =>
+            p.id === projectId ? { ...p, clips, audioLayers, overlayLayers, steps: newSteps } : p
+          ),
+          ...withUndo(s),
+        }
+      }),
+
+      removeStep: (projectId, stepId) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === projectId
+            ? { ...p, steps: (p.steps ?? []).filter(st => st.id !== stepId) }
+            : p
+        ),
+        ...withUndo(s),
+      })),
+
+      moveStep: (projectId, stepId, newPosition) => set(s => {
+        const project = s.projects.find(p => p.id === projectId)
+        if (!project) return s
+
+        const { clips, audioLayers, overlayLayers } = splitAllAtTime(project, s.clipSpeeds, newPosition)
+        const steps = (project.steps ?? [])
+          .map(st => st.id === stepId ? { ...st, timelinePosition: newPosition } : st)
+          .sort((a, b) => (a.timelinePosition ?? 0) - (b.timelinePosition ?? 0))
+
+        return {
+          projects: s.projects.map(p =>
+            p.id === projectId ? { ...p, clips, audioLayers, overlayLayers, steps } : p
+          ),
+          ...withUndo(s),
+        }
+      }),
+
+      reorderSteps: (projectId, fromIndex, toIndex) => set(s => {
+        const project = s.projects.find(p => p.id === projectId)
+        if (!project || fromIndex === toIndex) return s
+        const baseTimings = getClipTimings(project.clips, s.clipSpeeds)
+        function resolvePos(st: Step): number {
+          if (st.timelinePosition !== undefined) return st.timelinePosition
+          return baseTimings.find(t => t.clip.id === st.clipId)?.start ?? 0
+        }
+        const sorted = [...(project.steps ?? [])].sort((a, b) => resolvePos(a) - resolvePos(b))
+        if (fromIndex < 0 || toIndex < 0 || fromIndex >= sorted.length || toIndex >= sorted.length) return s
+
+        const timings = baseTimings
+        const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
+
+        // Region boundaries: [pos0, pos1, ..., posN, totalDuration]
+        const positions = sorted.map(st => resolvePos(st))
+        const boundaries = [...positions, totalDuration]
+        const regionDurations = sorted.map((_, i) => boundaries[i + 1] - boundaries[i])
+
+        // origIndices[j] = which original region is at new position j after the move
+        const origIndices = sorted.map((_, i) => i)
+        const [movedIdx] = origIndices.splice(fromIndex, 1)
+        origIndices.splice(toIndex, 0, movedIdx)
+
+        // New start time for each new-order slot
+        const newPositions: number[] = []
+        let cum = 0
+        for (const oi of origIndices) {
+          newPositions.push(cum)
+          cum += regionDurations[oi]
+        }
+
+        // Reverse map: origRegionToNewStart[i] = new timeline start of original region i
+        const origRegionToNewStart: number[] = new Array(sorted.length)
+        for (let j = 0; j < origIndices.length; j++) {
+          origRegionToNewStart[origIndices[j]] = newPositions[j]
+        }
+
+        // Remap a timeline time from the old layout to the new one
+        function remapTime(t: number): number {
+          for (let i = 0; i < sorted.length; i++) {
+            if (t >= boundaries[i] - 0.001 && t < boundaries[i + 1] + 0.001) {
+              return origRegionToNewStart[i] + (t - positions[i])
+            }
+          }
+          return t
+        }
+
+        // Reorder clip groups
+        const clipGroups: Clip[][] = sorted.map((_, i) =>
+          timings
+            .filter(t => t.start >= boundaries[i] - 0.001 && t.start < boundaries[i + 1] - 0.001)
+            .map(t => t.clip)
+        )
+        const clips = origIndices.flatMap(oi => clipGroups[oi])
+
+        // Remap audio and overlay layer start times
+        const audioLayers = (project.audioLayers ?? []).map(l => ({ ...l, startAt: remapTime(l.startAt) }))
+        const overlayLayers = (project.overlayLayers ?? []).map(ol => ({ ...ol, startAt: remapTime(ol.startAt) }))
+
+        // Steps keep their identity (title/description) but get new (explicit) timeline positions
+        const steps = origIndices.map((oi, j) => ({ ...sorted[oi], timelinePosition: newPositions[j] }))
+
+        return {
+          projects: s.projects.map(p =>
+            p.id === projectId ? { ...p, clips, audioLayers, overlayLayers, steps } : p
+          ),
+          ...withUndo(s),
+        }
+      }),
 
       setActiveProject: (id) => {
         set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, playheadTime: 0, isPlaying: false })
@@ -326,7 +526,6 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       })),
 
       removeAudioLayer: (layerId) => {
-        deleteBlob(layerId).catch(() => {})
         set(s => ({
           projects: s.projects.map(p =>
             p.id === s.activeProjectId
@@ -367,7 +566,6 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         ...withUndo(s),
       })),
       removeOverlayLayer: (id) => {
-        deleteBlob(id).catch(() => {})
         set(s => ({
           projects: s.projects.map(p =>
             p.id === s.activeProjectId
@@ -606,7 +804,6 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
             name: source.name,
             fileName: source.name + '.mp4',
             objectUrl: source.objectUrl,
-            blobId: source.id,
             duration: source.duration,
             volume: 1,
             startAt: timing.start,
@@ -780,6 +977,65 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           }
         })
       },
+
+      reorderClips: (fromIndex, toIndex) => set(s => {
+        const project = activeProject(s)
+        if (!project || fromIndex === toIndex) return s
+        const clips = [...project.clips]
+        const [removed] = clips.splice(fromIndex, 1)
+        clips.splice(toIndex, 0, removed)
+        return {
+          projects: replaceClips(s.projects, project.id, clips),
+          ...withUndo(s),
+        }
+      }),
+
+      requestFreezeFrame: () => set({ pendingFreezeFrame: true }),
+      cancelFreezeFrame: () => set({ pendingFreezeFrame: false }),
+      executeFreezeFrame: (sourceId, objectUrl, width, height) => set(s => {
+        const project = activeProject(s)
+        if (!project) return { pendingFreezeFrame: false }
+
+        const source: import('@/types').SourceVideo = {
+          id: sourceId, name: 'Freeze Frame', duration: 4, width, height, objectUrl, isImage: true,
+        }
+        const freezeClip: Clip = { id: uid(), sourceId, name: 'Freeze Frame', trimStart: 0, trimEnd: 4 }
+
+        const timings = getClipTimings(project.clips, s.clipSpeeds)
+        const t = s.playheadTime
+        const current = timings.find(tm => t > tm.start + 0.01 && t < tm.end - 0.01)
+
+        let newClips: Clip[]
+        if (current) {
+          const { clip: c, start } = current
+          const speed = s.clipSpeeds[c.id] ?? 1
+          const splitPoint = c.trimStart + (t - start) * speed
+          const idx = project.clips.findIndex(cl => cl.id === c.id)
+          if (splitPoint <= c.trimStart + 0.01 || splitPoint >= c.trimEnd - 0.01) {
+            newClips = [...project.clips.slice(0, idx + 1), freezeClip, ...project.clips.slice(idx + 1)]
+          } else {
+            const first:  Clip = { ...c, id: uid(), trimEnd: splitPoint }
+            const second: Clip = { ...c, id: uid(), trimStart: splitPoint }
+            newClips = [...project.clips.slice(0, idx), first, freezeClip, second, ...project.clips.slice(idx + 1)]
+          }
+        } else {
+          let insertIdx = project.clips.length - 1
+          for (let i = timings.length - 1; i >= 0; i--) {
+            if (timings[i].end <= t) { insertIdx = timings[i].index; break }
+          }
+          newClips = [...project.clips.slice(0, insertIdx + 1), freezeClip, ...project.clips.slice(insertIdx + 1)]
+        }
+
+        return {
+          pendingFreezeFrame: false,
+          projects: s.projects.map(p =>
+            p.id === project.id
+              ? { ...p, sources: [...p.sources, source], clips: newClips }
+              : p
+          ),
+          ...withUndo(s),
+        }
+      }),
 
       pushUndo: () => {
         const s = get()

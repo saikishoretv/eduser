@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import Preview from './Preview'
+import StepsPanel from './StepsPanel'
 import Toolbar from './Toolbar'
 import Timeline from './Timeline'
 import FormatSelector from './FormatSelector'
@@ -94,6 +95,8 @@ export default function EditorShell({ projectId }: Props) {
         s.setSelectedOverlayId(null)
       } else if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
         if (!overlayMode) audioMode ? s.splitAudioLayer() : s.split()
+      } else if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
+        if (!overlayMode && !audioMode) s.requestFreezeFrame()
       } else if (e.key === 'm' && !e.metaKey && !e.ctrlKey) {
         if (!audioMode && !overlayMode) s.merge()
       } else if (e.key === 'x' && (e.metaKey || e.ctrlKey)) {
@@ -264,9 +267,14 @@ export default function EditorShell({ projectId }: Props) {
         </div>
       )}
 
-      {/* Preview */}
-      <div className="flex-1 min-h-0">
-        <Preview />
+      {/* Preview area: steps panel (30%) + video preview */}
+      <div className="flex-1 min-h-0 flex overflow-hidden">
+        {project.steps && (
+          <StepsPanel projectId={projectId} />
+        )}
+        <div className="flex-1 min-w-0 min-h-0">
+          <Preview />
+        </div>
       </div>
 
       {/* Toolbar */}

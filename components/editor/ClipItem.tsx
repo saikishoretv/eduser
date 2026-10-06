@@ -16,9 +16,11 @@ const COLORS = [
 interface Props {
   timing: ClipTiming
   zoom: number
+  stepColorIdx?: number
+  onBodyMouseDown?: (e: React.MouseEvent) => void
 }
 
-export default function ClipItem({ timing, zoom }: Props) {
+export default function ClipItem({ timing, zoom, stepColorIdx, onBodyMouseDown }: Props) {
   const { clip, start, duration, index } = timing
 
   const isSelected = useEditorStore(s => s.selectedClipIds.includes(clip.id))
@@ -28,16 +30,17 @@ export default function ClipItem({ timing, zoom }: Props) {
   const setSelectedOverlayId    = useEditorStore(s => s.setSelectedOverlayId)
   const updateClip              = useEditorStore(s => s.updateClip)
   const pushUndo                = useEditorStore(s => s.pushUndo)
-  const sourceDuration          = useEditorStore(s =>
-    s.projects.find(p => p.id === s.activeProjectId)?.sources.find(src => src.id === clip.sourceId)?.duration ?? clip.trimEnd
-  )
+  const sourceDuration          = useEditorStore(s => {
+    if (clip.background) return 300
+    return s.projects.find(p => p.id === s.activeProjectId)?.sources.find(src => src.id === clip.sourceId)?.duration ?? clip.trimEnd
+  })
 
   const leftTrimRef  = useRef<{ startX: number; trimStart: number } | null>(null)
   const rightTrimRef = useRef<{ startX: number; trimEnd: number } | null>(null)
   const [leftDragging,  setLeftDragging]  = useState(false)
   const [rightDragging, setRightDragging] = useState(false)
 
-  const colorClass = COLORS[index % COLORS.length]
+  const colorClass = clip.background ? '' : COLORS[(stepColorIdx ?? index) % COLORS.length]
   const widthPx = duration * zoom
   const leftPx = start * zoom
 
@@ -93,21 +96,25 @@ export default function ClipItem({ timing, zoom }: Props) {
   return (
     <div
       onClick={handleClick}
-      className={`absolute top-0 bottom-0 rounded border cursor-pointer overflow-hidden transition-all
+      onMouseDown={onBodyMouseDown}
+      className={`absolute top-0 bottom-0 rounded border cursor-grab overflow-hidden
         ${colorClass}
+        ${clip.background ? 'border-white/20' : ''}
         ${isSelected
           ? 'ring-2 ring-white ring-offset-1 ring-offset-neutral-900 brightness-110'
           : 'hover:brightness-110'
         }
       `}
-      style={{ left: leftPx, width: Math.max(widthPx - 2, 3) }}
+      style={{
+        left: leftPx,
+        width: Math.max(widthPx - 2, 3),
+        ...(clip.background ? { background: clip.background.value } : undefined),
+      }}
     >
-      {widthPx > 40 && (
-        <span className="absolute inset-0 flex items-center px-2 text-[11px] text-white/90 font-medium truncate pointer-events-none select-none gap-1.5">
-          {clip.name}
-          {speed !== 1 && (
-            <span className="shrink-0 text-[10px] bg-black/40 px-1 rounded">{speed}×</span>
-          )}
+      {/* Speed badge — shown when clip speed is not 1× */}
+      {speed !== 1 && widthPx > 40 && (
+        <span className="absolute top-1 left-2 text-[10px] bg-black/40 px-1 rounded text-white/80 pointer-events-none select-none">
+          {speed}×
         </span>
       )}
       {/* Left trim handle */}

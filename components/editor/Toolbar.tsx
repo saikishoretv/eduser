@@ -72,6 +72,7 @@ export default function Toolbar() {
 
   const clipSpeeds         = useEditorStore(s => s.clipSpeeds)
   const setClipSpeed       = useEditorStore(s => s.setClipSpeed)
+  const requestFreezeFrame = useEditorStore(s => s.requestFreezeFrame)
   const split              = useEditorStore(s => s.split)
   const cut                = useEditorStore(s => s.cut)
   const copy               = useEditorStore(s => s.copy)
@@ -205,12 +206,13 @@ export default function Toolbar() {
         { label: 'Duplicate', hint: '⌘D', fn: duplicateAudioLayer, enabled: true                    },
       ]
     : [
-        { label: 'Split',     hint: 'S',  fn: split,     enabled: true           },
-        { label: 'Cut',       hint: '⌘X', fn: cut,       enabled: hasSelection   },
-        { label: 'Copy',      hint: '⌘C', fn: copy,      enabled: hasSelection   },
-        { label: 'Paste',     hint: '⌘V', fn: paste,     enabled: hasClipboard   },
-        { label: 'Duplicate', hint: '⌘D', fn: duplicate, enabled: hasSelection   },
-        { label: 'Merge',     hint: 'M',  fn: merge,     enabled: canMergeClips  },
+        { label: 'Split',     hint: 'S',  fn: split,             enabled: true                       },
+        { label: 'Freeze',    hint: 'F',  fn: requestFreezeFrame, enabled: !!(project?.clips.length) },
+        { label: 'Cut',       hint: '⌘X', fn: cut,               enabled: hasSelection               },
+        { label: 'Copy',      hint: '⌘C', fn: copy,              enabled: hasSelection               },
+        { label: 'Paste',     hint: '⌘V', fn: paste,             enabled: hasClipboard               },
+        { label: 'Duplicate', hint: '⌘D', fn: duplicate,         enabled: hasSelection               },
+        { label: 'Merge',     hint: 'M',  fn: merge,             enabled: canMergeClips              },
       ]
 
   // ── Color mode ──────────────────────────────────────────────────────────────
@@ -638,7 +640,27 @@ export default function Toolbar() {
       {!audioMode && hasSelection && (
         <>
           <div className="w-px h-4 bg-neutral-700 mx-1" />
-          <div className="flex items-center gap-2 px-2">
+
+          {/* Speed dropdown */}
+          <div className="flex items-center gap-1.5 px-1">
+            <span className="text-[11px] text-neutral-500">Speed</span>
+            <select
+              value={activeSpeed === 'mixed' ? '' : activeSpeed}
+              onChange={e => handleSpeedChange(parseFloat(e.target.value))}
+              aria-label="Clip speed"
+              className="bg-neutral-800 border border-neutral-600 rounded px-1.5 py-0.5 text-[11px] text-white cursor-pointer"
+            >
+              {activeSpeed === 'mixed' && <option value="">mixed</option>}
+              {([0.5, 1, 1.5, 2, 4] as const).map(s => (
+                <option key={s} value={s}>{s}×</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+
+          {/* Zoom group: slider + preset dropdown + optional transition duration */}
+          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-neutral-700 bg-neutral-800/50">
             <span className="text-[11px] text-neutral-500">Zoom</span>
             <input
               type="range"
@@ -659,55 +681,22 @@ export default function Toolbar() {
                 reset
               </button>
             )}
-          </div>
-
-          <div className="w-px h-4 bg-neutral-700 mx-1" />
-
-          {/* Speed presets */}
-          <div className="flex items-center gap-1 px-1">
-            <span className="text-[11px] text-neutral-500 mr-0.5">Speed</span>
-            {([0.5, 1, 1.5, 2, 4] as const).map(s => (
-              <button
-                key={s}
-                onClick={() => handleSpeedChange(s)}
-                className={`px-2 py-1 rounded text-[11px] font-medium tabular-nums transition-colors ${
-                  activeSpeed === s
-                    ? 'bg-blue-600 text-white'
-                    : 'text-neutral-400 hover:bg-neutral-700 hover:text-white'
-                }`}
-              >
-                {s}×
-              </button>
-            ))}
-          </div>
-
-          <div className="w-px h-4 bg-neutral-700 mx-1" />
-
-          <div className="flex items-center gap-1 px-1">
-            {([
-              { value: 'none',      label: 'Static'    },
-              { value: 'punch',     label: 'In / Out'  },
-              { value: 'ken-burns', label: 'Ken Burns' },
-            ] as { value: ZoomPreset; label: string }[]).map(({ value, label }) => (
-              <button
-                key={value}
-                onClick={() => handlePresetChange(value)}
-                className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-                  activeZoomPreset === value
-                    ? 'bg-blue-600 text-white'
-                    : 'text-neutral-400 hover:bg-neutral-700 hover:text-white'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {activeZoomPreset === 'punch' && (
-            <>
-              <div className="w-px h-4 bg-neutral-700 mx-1" />
-              <div className="flex items-center gap-2 px-2">
-                <span className="text-[11px] text-neutral-500">Transition</span>
+            <div className="w-px h-4 bg-neutral-700" />
+            <select
+              value={activeZoomPreset === 'mixed' ? '' : activeZoomPreset}
+              onChange={e => handlePresetChange(e.target.value as ZoomPreset)}
+              aria-label="Zoom preset"
+              className="bg-neutral-800 border border-neutral-600 rounded px-1.5 py-0.5 text-[11px] text-white cursor-pointer"
+            >
+              {activeZoomPreset === 'mixed' && <option value="">mixed</option>}
+              <option value="none">Static</option>
+              <option value="punch">In / Out</option>
+              <option value="ken-burns">Ken Burns</option>
+            </select>
+            {activeZoomPreset === 'punch' && (
+              <>
+                <div className="w-px h-4 bg-neutral-700" />
+                <span className="text-[11px] text-neutral-500">Duration</span>
                 <input
                   type="range"
                   min={0.1}
@@ -719,9 +708,9 @@ export default function Toolbar() {
                   className="w-20 accent-blue-500"
                 />
                 <span className="text-[11px] text-neutral-400 tabular-nums w-8">{avgTransition.toFixed(1)}s</span>
-              </div>
-            </>
-          )}
+              </>
+            )}
+          </div>
 
           <div className="w-px h-4 bg-neutral-700 mx-1" />
           <button

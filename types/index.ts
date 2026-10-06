@@ -18,11 +18,18 @@ export interface SourceVideo {
   width: number
   height: number
   objectUrl: string
+  isImage?: true                // set for freeze-frame still-image sources
+  hasAudio?: boolean            // false when the source video has no audio track
   s3Key?: string                // set after upload; used by the DB save (T8) and cache miss handler (T6)
   transcript?: TranscriptSegment[]
   detectedLanguage?: string     // ISO 639-1 code returned by Whisper, e.g. 'en', 'hi', 'ta'
   translationLanguage?: string  // display name of the language translated to, e.g. 'Hindi'
   translatedTranscript?: TranscriptSegment[]
+}
+
+export interface ClipBackground {
+  type: 'solid' | 'gradient'
+  value: string  // hex color for solid, CSS gradient string for gradient
 }
 
 export interface Clip {
@@ -31,6 +38,7 @@ export interface Clip {
   name: string
   trimStart: number // seconds into source
   trimEnd: number   // seconds into source
+  background?: ClipBackground  // if set, renders a color/gradient fill (no video)
 }
 
 export interface AudioLayer {
@@ -38,7 +46,6 @@ export interface AudioLayer {
   name: string         // display name
   fileName: string     // original filename with extension (used by FFmpeg)
   objectUrl: string
-  blobId?: string      // IndexedDB key; defaults to id. Detached audio reuses the source video's id.
   duration: number     // total source duration in seconds
   volume: number       // 0–1
   startAt: number      // timeline position (seconds)
@@ -61,7 +68,6 @@ export interface OverlayLayer {
 
   // Image overlay
   objectUrl?: string
-  blobId?: string
   fileName?: string
   width: number      // % of frame width
 
@@ -83,6 +89,7 @@ export interface Step {
   sourceId: string     // references a SourceVideo
   title: string
   description: string
+  timelinePosition?: number  // seconds into timeline; if unset, derived from the linked clip's start
 }
 
 export interface Project {

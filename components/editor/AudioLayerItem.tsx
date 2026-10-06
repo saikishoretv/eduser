@@ -4,13 +4,16 @@ import { useRef, useState } from 'react'
 import { AudioLayer } from '@/types'
 import { useEditorStore } from '@/store/store'
 
+const STEP_ACCENTS = ['#2563eb','#7c3aed','#059669','#d97706','#e11d48','#0891b2']
+
 interface Props {
   layer: AudioLayer
   zoom: number
   selected: boolean
+  stepColorIdx?: number
 }
 
-export default function AudioLayerItem({ layer, zoom, selected }: Props) {
+export default function AudioLayerItem({ layer, zoom, selected, stepColorIdx }: Props) {
   const updateAudioLayer        = useEditorStore(s => s.updateAudioLayer)
   const removeAudioLayer        = useEditorStore(s => s.removeAudioLayer)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
@@ -106,6 +109,13 @@ export default function AudioLayerItem({ layer, zoom, selected }: Props) {
         ${selected ? 'border-emerald-400' : 'border-emerald-800 hover:border-emerald-600'}`}
       style={{ height: `${heightPct}%` }}
     >
+      {/* Step accent line */}
+      {stepColorIdx !== undefined && (
+        <div
+          className="absolute top-0 left-0 right-0 h-0.5 pointer-events-none"
+          style={{ background: STEP_ACCENTS[stepColorIdx % STEP_ACCENTS.length] }}
+        />
+      )}
       {/* Stripe pattern to hint it's audio */}
       <div className="absolute inset-0 opacity-20"
         style={{ backgroundImage: 'repeating-linear-gradient(90deg, transparent, transparent 6px, rgba(52,211,153,0.4) 6px, rgba(52,211,153,0.4) 7px)' }}

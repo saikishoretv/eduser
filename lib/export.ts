@@ -30,6 +30,16 @@ export interface ExportOptions {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let ffmpegInstance: any = null
 
+function detectAudioTrack(objectUrl: string): Promise<boolean> {
+  return new Promise(resolve => {
+    const v = document.createElement('video')
+    v.preload = 'metadata'
+    v.onloadedmetadata = () => resolve((v.audioTracks?.length ?? 0) > 0)
+    v.onerror = () => resolve(false)
+    v.src = objectUrl
+  })
+}
+
 function loadScript(src: string): Promise<void> {
   return new Promise((resolve, reject) => {
     if (document.querySelector(`script[src="${src}"]`)) { resolve(); return }
@@ -519,14 +529,68 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     console.log(`[export] ${subEvents.length} subtitle events (style: ${subtitleStyle})`)
 
     // Build filter graph
+    // Resolve hasAudio for each source (use stored value if available, else detect via HTMLVideoElement)
+    const sourceAudioMap = new Map<string, boolean>()
+    for (const sourceId of writtenSources) {
+      const src = sources.find(s => s.id === sourceId)
+      if (!src || src.isImage) { sourceAudioMap.set(sourceId, false); continue }
+      if (src.hasAudio !== undefined) { sourceAudioMap.set(sourceId, src.hasAudio); continue }
+      sourceAudioMap.set(sourceId, src.objectUrl ? await detectAudioTrack(src.objectUrl) : false)
+    }
+
     const filterParts: string[] = []
     const inputArgs: string[] = []
     const sourceIndexMap = new Map<string, number>()
     let inputIdx = 0
 
     for (const sourceId of writtenSources) {
-      inputArgs.push('-i', `src_${sourceId}.mp4`)
+      const src = sources.find(s => s.id === sourceId)
+      if (src?.isImage) {
+        // Freeze-frame: loop the single JPEG frame so trim filters work normally
+        inputArgs.push('-loop', '1', '-framerate', '25', '-i', `src_${sourceId}.mp4`)
+      } else {
+        inputArgs.push('-i', `src_${sourceId}.mp4`)
+      }
       sourceIndexMap.set(sourceId, inputIdx++)
+    }
+
+    // Pre-render background clips (solid / gradient) to PNG so FFmpeg can use them
+    const bgClipInputIndices = new Map<string, number>()
+    for (const clip of clips) {
+      if (!clip.background) continue
+      const canvas = document.createElement('canvas')
+      canvas.width = outW
+      canvas.height = outH
+      const ctx = canvas.getContext('2d')!
+      if (clip.background.type === 'solid') {
+        ctx.fillStyle = clip.background.value
+        ctx.fillRect(0, 0, outW, outH)
+      } else {
+        // Gradient: parse linear-gradient(angle, stop1, stop2, ...) into CanvasGradient
+        const m = clip.background.value.match(/linear-gradient\(\s*([^,]+),\s*(.+)\)/i)
+        if (m) {
+          const angleDeg = parseFloat(m[1]) || 180
+          const rad = (angleDeg - 90) * Math.PI / 180
+          const grd = ctx.createLinearGradient(
+            (0.5 - Math.cos(rad) * 0.5) * outW, (0.5 - Math.sin(rad) * 0.5) * outH,
+            (0.5 + Math.cos(rad) * 0.5) * outW, (0.5 + Math.sin(rad) * 0.5) * outH,
+          )
+          m[2].split(',').forEach((stop, idx, arr) => {
+            const parts = stop.trim().split(/\s+/)
+            grd.addColorStop(parts[1] ? parseFloat(parts[1]) / 100 : idx / Math.max(arr.length - 1, 1), parts[0])
+          })
+          ctx.fillStyle = grd
+          ctx.fillRect(0, 0, outW, outH)
+        } else {
+          ctx.fillStyle = '#000000'
+          ctx.fillRect(0, 0, outW, outH)
+        }
+      }
+      const pngArr = new Uint8Array(await new Promise<Blob>(r => canvas.toBlob(b => r(b!), 'image/png')).then(b => b.arrayBuffer()))
+      const pngFile = `bg_${clip.id}.png`
+      await ffmpeg.writeFile(pngFile, pngArr)
+      inputArgs.push('-loop', '1', '-framerate', '25', '-i', pngFile)
+      bgClipInputIndices.set(clip.id, inputIdx++)
     }
 
     // Audio layer inputs (after all video sources)
@@ -733,44 +797,56 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     for (let i = 0; i < timings.length; i++) {
       const timing = timings[i]
       const { clip } = timing
+      const source = sources.find(s => s.id === clip.sourceId)
+      const clipDur = clip.trimEnd - clip.trimStart
+      const clipDurStr = clipDur.toFixed(6)
+      const speed = clipSpeeds[clip.id] ?? 1
+      const trimLabel = `[trim${i}]`
+
+      if (clip.background) {
+        // Background clip — use pre-rendered PNG input, no audio stream
+        const bgIdx = bgClipInputIndices.get(clip.id)!
+        filterParts.push(`[${bgIdx}:v]trim=start=0:end=${clipDurStr},setpts=PTS-STARTPTS,scale=${outW}:${outH},setsar=1,fps=30${trimLabel}`)
+        filterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim${i}]`)
+        finalVideoLabels.push(trimLabel)
+        continue
+      }
+
       const srcIdx = sourceIndexMap.get(clip.sourceId)!
       const crop = clipCrops[clip.id] ?? { x: 50, y: 50 }
       const zoom = clipZooms[clip.id] ?? 1
-
-      const speed = clipSpeeds[clip.id] ?? 1
       const speedVideoFilter = speed !== 1 ? `,setpts=PTS/${speed.toFixed(6)}` : ''
       const trimFilter = `[${srcIdx}:v]trim=start=${clip.trimStart}:end=${clip.trimEnd},setpts=PTS-STARTPTS${speedVideoFilter}`
-      const trimLabel = `[trim${i}]`
 
       let scaleAndCrop = ''
       if (outputFormat || zoom !== 1) {
-        // Cover + crop: scale up to zoomed dimensions then crop to output size.
-        // Used for all format-specific outputs and whenever zoom > 1 (even in original-format mode).
         const zoomedW = Math.ceil(outW * zoom)
         const zoomedH = Math.ceil(outH * zoom)
         const evenZW = zoomedW % 2 === 0 ? zoomedW : zoomedW + 1
         const evenZH = zoomedH % 2 === 0 ? zoomedH : zoomedH + 1
         const cropX = `(${evenZW}-${outW})*${(crop.x / 100).toFixed(4)}`
         const cropY = `(${evenZH}-${outH})*${(crop.y / 100).toFixed(4)}`
-        scaleAndCrop = `,scale=${evenZW}:${evenZH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}:${cropX}:${cropY}`
+        scaleAndCrop = `,scale=${evenZW}:${evenZH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}:${cropX}:${cropY},setsar=1`
       } else {
-        // No format selected, no zoom: contain + letterbox/pillarbox to preserve source aspect ratio.
-        scaleAndCrop = `,scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2`
+        scaleAndCrop = `,scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
       }
 
       const colorFilter = toFfmpegColorFilter(clipColorCorrections[clip.id] ?? COLOR_CORRECTION_DEFAULT)
       console.log(`[export] clip ${clip.id} colorFilter: "${colorFilter || '(none)'}"`)
-      filterParts.push(`${trimFilter}${scaleAndCrop}${colorFilter ? ',' + colorFilter : ''}${trimLabel}`)
+      filterParts.push(`${trimFilter}${scaleAndCrop}${colorFilter ? ',' + colorFilter : ''},fps=30${trimLabel}`)
 
-      // Apply clip transitions (fade / blur / slide) — returns the final labeled stream
       const tIn  = clipTransitionIn[clip.id]  ?? 'none'
       const tOut = clipTransitionOut[clip.id] ?? 'none'
-      const clipDur = clip.trimEnd - clip.trimStart
       const finalLabel = applyClipTransitions(i, clipDur, tIn, tOut, clipTransitionDurations[clip.id] ?? 0.5, outW, outH, filterParts)
       finalVideoLabels.push(finalLabel)
 
-      const atempoChain = buildAtempoChain(speed)
-      filterParts.push(`[${srcIdx}:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS${atempoChain}[atrim${i}]`)
+      // Use silence for image sources and for video sources that have no audio track
+      if (!sourceAudioMap.get(clip.sourceId)) {
+        filterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim${i}]`)
+      } else {
+        const atempoChain = buildAtempoChain(speed)
+        filterParts.push(`[${srcIdx}:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS${atempoChain}[atrim${i}]`)
+      }
     }
 
     const videoInputs = finalVideoLabels.join('')
@@ -881,6 +957,9 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     }
     for (const ol of textOverlays) {
       await ffmpeg.deleteFile(`text_ol_${ol.id}.png`).catch(() => {})
+    }
+    for (const clip of clips) {
+      if (clip.background) await ffmpeg.deleteFile(`bg_${clip.id}.png`).catch(() => {})
     }
     await ffmpeg.deleteFile('output.mp4').catch(() => {})
 

@@ -45,7 +45,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-neutral-950 flex items-center justify-center px-4">
       <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-          <span className="text-white text-2xl font-semibold tracking-tight">Clipr</span>
+          <span className="text-white text-2xl font-semibold tracking-tight">Eduser</span>
         </div>
 
         <div className="bg-neutral-900 border border-neutral-800 rounded-2xl overflow-hidden">
