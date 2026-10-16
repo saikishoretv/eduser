@@ -11,14 +11,13 @@ interface Props {
   zoom: number
   selected: boolean
   stepColorIdx?: number
+  onBodyMouseDown?: (e: React.MouseEvent) => void
 }
 
-export default function AudioLayerItem({ layer, zoom, selected, stepColorIdx }: Props) {
+export default function AudioLayerItem({ layer, zoom, selected, stepColorIdx, onBodyMouseDown }: Props) {
   const updateAudioLayer        = useEditorStore(s => s.updateAudioLayer)
-  const removeAudioLayer        = useEditorStore(s => s.removeAudioLayer)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
   const pushUndo                = useEditorStore(s => s.pushUndo)
-  const dragRef      = useRef<{ startX: number; startAt: number } | null>(null)
   const leftTrimRef  = useRef<{ startX: number; trimStart: number; startAt: number } | null>(null)
   const rightTrimRef = useRef<{ startX: number; trimEnd: number } | null>(null)
   const [leftDragging,  setLeftDragging]  = useState(false)
@@ -27,26 +26,6 @@ export default function AudioLayerItem({ layer, zoom, selected, stepColorIdx }: 
   const layerDuration = layer.trimEnd - layer.trimStart
   const left  = layer.startAt * zoom
   const width = Math.max(layerDuration * zoom, 4)
-
-  function handleMouseDown(e: React.MouseEvent) {
-    e.stopPropagation()
-    pushUndo()
-    dragRef.current = { startX: e.clientX, startAt: layer.startAt }
-
-    const handleMove = (ev: MouseEvent) => {
-      const drag = dragRef.current
-      if (!drag) return
-      const newStartAt = Math.max(0, drag.startAt + (ev.clientX - drag.startX) / zoom)
-      updateAudioLayer(layer.id, { startAt: newStartAt })
-    }
-    const handleUp = () => {
-      dragRef.current = null
-      window.removeEventListener('mousemove', handleMove)
-      window.removeEventListener('mouseup', handleUp)
-    }
-    window.addEventListener('mousemove', handleMove)
-    window.addEventListener('mouseup', handleUp)
-  }
 
   function handleLeftTrimMouseDown(e: React.MouseEvent) {
     e.stopPropagation()
@@ -100,7 +79,7 @@ export default function AudioLayerItem({ layer, zoom, selected, stepColorIdx }: 
     <div
       className="absolute flex items-center"
       style={{ left, width, top: 0, bottom: 0 }}
-      onMouseDown={handleMouseDown}
+      onMouseDown={onBodyMouseDown}
       onClick={e => { e.stopPropagation(); setSelectedAudioLayerId(layer.id) }}
     >
     <div
@@ -142,29 +121,6 @@ export default function AudioLayerItem({ layer, zoom, selected, stepColorIdx }: 
         </svg>
         <span className="text-[10px] text-emerald-300 font-medium truncate flex-1 min-w-0">{layer.name}</span>
 
-        {selected && (
-          <div className="flex items-center gap-1.5 shrink-0" onMouseDown={e => e.stopPropagation()}>
-            {/* Volume */}
-            <span className="text-[9px] text-emerald-500">{Math.round(layer.volume * 100)}%</span>
-            <input
-              type="range"
-              min={0} max={1} step={0.05}
-              value={layer.volume}
-              onChange={e => updateAudioLayer(layer.id, { volume: parseFloat(e.target.value) })}
-              onClick={e => e.stopPropagation()}
-              aria-label="Volume"
-              className="w-16 accent-emerald-400"
-            />
-            {/* Delete */}
-            <button
-              onClick={e => { e.stopPropagation(); removeAudioLayer(layer.id) }}
-              aria-label="Remove audio layer"
-              className="w-4 h-4 flex items-center justify-center text-red-400 hover:text-red-300 text-base leading-none"
-            >
-              ×
-            </button>
-          </div>
-        )}
       </div>
     </div>
     </div>

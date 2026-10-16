@@ -105,8 +105,13 @@ export default function Toolbar() {
   const copyOverlayLayer         = useEditorStore(s => s.copyOverlayLayer)
   const pasteOverlayLayer        = useEditorStore(s => s.pasteOverlayLayer)
   const duplicateOverlayLayer    = useEditorStore(s => s.duplicateOverlayLayer)
-  const overlayClipboard         = useEditorStore(s => s.overlayClipboard)
-
+  const overlayClipboard            = useEditorStore(s => s.overlayClipboard)
+  const selectedShapeId    = useEditorStore(s => s.selectedShapeId)
+  const setSelectedShapeId = useEditorStore(s => s.setSelectedShapeId)
+  const addShapeLayer      = useEditorStore(s => s.addShapeLayer)
+  const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
+  const removeShapeLayer   = useEditorStore(s => s.removeShapeLayer)
+  const playheadTime       = useEditorStore(s => s.playheadTime)
   const project       = projects.find(p => p.id === activeProjectId) ?? null
   const hasSelection  = selectedClipIds.length > 0
   const hasClipboard  = clipboard.length > 0
@@ -171,6 +176,7 @@ export default function Toolbar() {
 
   const selectedOverlay     = project?.overlayLayers?.find(ol => ol.id === selectedOverlayId) ?? null
   const selectedAudioLayer  = project?.audioLayers?.find(l => l.id === selectedAudioLayerId) ?? null
+  const selectedShape       = project?.shapeLayers?.find(sl => sl.id === selectedShapeId) ?? null
 
   const activeTextFormatPreset = selectedOverlay?.type === 'text'
     ? TEXT_FORMAT_PRESETS.find(p => {
@@ -621,8 +627,40 @@ export default function Toolbar() {
         <span className={`text-[10px] ${selectedOverlayId || audioMode || hasSelection ? 'text-neutral-500' : 'text-neutral-700'}`}>⌫</span>
       </button>
 
-      {audioMode && (
-        <span className="ml-2 text-[11px] text-emerald-600 font-medium">Audio selected — adjust volume on the track</span>
+      {audioMode && selectedAudioLayer && (
+        <>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <span className="text-[11px] text-neutral-500">Vol</span>
+          <span className="text-[11px] text-emerald-500 w-7 tabular-nums">{Math.round(selectedAudioLayer.volume * 100)}%</span>
+          <input
+            type="range" min={0} max={1} step={0.05}
+            value={selectedAudioLayer.volume}
+            onChange={e => updateAudioLayer(selectedAudioLayerId!, { volume: parseFloat(e.target.value) })}
+            aria-label="Volume"
+            className="w-20 accent-emerald-400"
+          />
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <button
+            onClick={() => updateAudioLayer(selectedAudioLayerId!, { fadeIn: (selectedAudioLayer.fadeIn ?? 0) > 0 ? 0 : 0.5 })}
+            className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+              (selectedAudioLayer.fadeIn ?? 0) > 0
+                ? 'bg-emerald-700 text-white'
+                : 'text-neutral-400 hover:bg-neutral-700 hover:text-white'
+            }`}
+          >
+            Fade In
+          </button>
+          <button
+            onClick={() => updateAudioLayer(selectedAudioLayerId!, { fadeOut: (selectedAudioLayer.fadeOut ?? 0) > 0 ? 0 : 0.5 })}
+            className={`px-2.5 py-1 rounded text-[11px] font-medium transition-colors ${
+              (selectedAudioLayer.fadeOut ?? 0) > 0
+                ? 'bg-emerald-700 text-white'
+                : 'text-neutral-400 hover:bg-neutral-700 hover:text-white'
+            }`}
+          >
+            Fade Out
+          </button>
+        </>
       )}
 
       {!audioMode && selectedClipIds.length === 1 && (
@@ -651,7 +689,7 @@ export default function Toolbar() {
               className="bg-neutral-800 border border-neutral-600 rounded px-1.5 py-0.5 text-[11px] text-white cursor-pointer"
             >
               {activeSpeed === 'mixed' && <option value="">mixed</option>}
-              {([0.5, 1, 1.5, 2, 4] as const).map(s => (
+              {([0.5, 0.75, 1, 1.5, 2, 4] as const).map(s => (
                 <option key={s} value={s}>{s}×</option>
               ))}
             </select>
@@ -807,6 +845,63 @@ export default function Toolbar() {
               </>
             )}
           </div>
+        </>
+      )}
+
+      {/* Shapes ── Add Rectangle button + selected shape controls */}
+      <div className="w-px h-4 bg-neutral-700 mx-1" />
+      <button
+        onClick={() => addShapeLayer({
+          id: crypto.randomUUID(),
+          type: 'rectangle',
+          startAt: playheadTime,
+          duration: 3,
+          x: 50, y: 50,
+          width: 30, height: 20,
+          strokeColor: '#3b82f6',
+          strokeWidth: 2,
+          strokeOpacity: 1,
+          borderRadius: 4,
+          opacity: 1,
+        })}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <rect x="3" y="6" width="18" height="12" rx="2" />
+        </svg>
+        Rectangle
+      </button>
+
+      {selectedShape && (
+        <>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          {/* Stroke */}
+          <span className="text-[11px] text-neutral-500 shrink-0">Stroke</span>
+          <input type="color" value={selectedShape.strokeColor}
+            onChange={e => updateShapeLayer(selectedShape.id, { strokeColor: e.target.value })}
+            className="w-5 h-5 rounded cursor-pointer border border-neutral-600 bg-transparent p-0" />
+          <input type="range" min={0} max={8} step={0.5} value={selectedShape.strokeWidth}
+            onChange={e => updateShapeLayer(selectedShape.id, { strokeWidth: parseFloat(e.target.value) })}
+            className="w-14 accent-blue-400" />
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          {/* Radius */}
+          <span className="text-[11px] text-neutral-500 shrink-0">Radius</span>
+          <input type="range" min={0} max={50} step={1} value={selectedShape.borderRadius}
+            onChange={e => updateShapeLayer(selectedShape.id, { borderRadius: parseFloat(e.target.value) })}
+            className="w-14 accent-blue-400" />
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          {/* Opacity */}
+          <span className="text-[11px] text-neutral-500 shrink-0">Opacity</span>
+          <input type="range" min={0} max={1} step={0.05} value={selectedShape.opacity}
+            onChange={e => updateShapeLayer(selectedShape.id, { opacity: parseFloat(e.target.value) })}
+            className="w-14 accent-blue-400" />
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <button
+            onClick={() => { removeShapeLayer(selectedShape.id); setSelectedShapeId(null) }}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium text-neutral-400 hover:bg-red-950 hover:text-red-400 transition-colors"
+          >
+            Delete
+          </button>
         </>
       )}
     </div>

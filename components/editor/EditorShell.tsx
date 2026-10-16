@@ -12,6 +12,8 @@ import ExportPanel from './ExportPanel'
 import CCModal from './CCModal'
 import { useSourceCache } from '@/lib/useSourceCache'
 import { useAutoSave } from '@/lib/useAutoSave'
+import { getClipTimings } from '@/lib/clipUtils'
+import { CcSegment, TranscriptSegment } from '@/types'
 
 interface Props {
   projectId: string
@@ -130,8 +132,47 @@ export default function EditorShell({ projectId }: Props) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  const setCcSegments = useEditorStore(s => s.setCcSegments)
+  const clipSpeeds    = useEditorStore(s => s.clipSpeeds)
+
+  // Migrate: if a project has source.transcript but no ccSegments, compute them now
+  useEffect(() => {
+    if (!project) return
+    if ((project.ccSegments?.length ?? 0) > 0) return
+    const source = project.sources[0]
+    const transcript: TranscriptSegment[] | undefined =
+      source?.translatedTranscript ?? source?.transcript
+    if (!transcript?.length) return
+
+    const timings = getClipTimings(project.clips, clipSpeeds)
+    const segments: CcSegment[] = []
+    for (const timing of timings) {
+      if (timing.clip.sourceId !== source.id) continue
+      const speed = clipSpeeds[timing.clip.id] ?? 1
+      const toTimeline = (src: number) => timing.start + (src - timing.clip.trimStart) / speed
+      for (const seg of transcript) {
+        if (seg.end <= timing.clip.trimStart || seg.start >= timing.clip.trimEnd) continue
+        segments.push({
+          id: crypto.randomUUID(),
+          text: seg.text,
+          startAt: toTimeline(Math.max(seg.start, timing.clip.trimStart)),
+          endAt:   toTimeline(Math.min(seg.end,   timing.clip.trimEnd)),
+          words: seg.words
+            ?.filter(w => w.end > timing.clip.trimStart && w.start < timing.clip.trimEnd)
+            .map(w => ({
+              word:    w.word,
+              startAt: toTimeline(Math.max(w.start, timing.clip.trimStart)),
+              endAt:   toTimeline(Math.min(w.end,   timing.clip.trimEnd)),
+            })),
+        })
+      }
+    }
+    if (segments.length > 0) setCcSegments(project.id, segments)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.id, project?.sources[0]?.transcript])
+
   const translationLanguage = project?.sources[0]?.translationLanguage ?? null
-  const hasTranscript       = project?.sources.some(s => s.transcript && s.transcript.length > 0)
+  const hasTranscript       = (project?.ccSegments?.length ?? 0) > 0
 
   // Auto-downgrade highlight CC to standard when a translation becomes active
   useEffect(() => {

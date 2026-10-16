@@ -9,3 +9,12 @@ html, body {
   padding: 0;
   height: 100%;
 }
+
+@keyframes shapeDrawOn {
+  from { stroke-dashoffset: 1; }
+  to   { stroke-dashoffset: 0; }
+}
+
+.shape-draw-on {
+  animation: shapeDrawOn 0.8s ease-out forwards;
+}

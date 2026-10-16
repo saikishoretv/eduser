@@ -16,6 +16,7 @@ const AI_ACTIONS: { id: AiAction; label: string; hint: string }[] = [
 
 const EMPTY_STEPS: Step[] = []
 const EMPTY_CLIPS: import('@/types').Clip[] = []
+const EMPTY_AUDIO_LAYERS: AudioLayer[] = []
 
 function stepPosition(step: Step, timings: ReturnType<typeof getClipTimings>): number {
   if (step.timelinePosition !== undefined) return step.timelinePosition
@@ -46,6 +47,7 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
   const addStep       = useEditorStore(s => s.addStep)
   const removeStep    = useEditorStore(s => s.removeStep)
   const addAudioLayer = useEditorStore(s => s.addAudioLayer)
+  const audioLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_AUDIO_LAYERS)
 
   const [dragIdx,     setDragIdx]     = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
@@ -227,6 +229,34 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
     if (positions[i] <= playhead) activeIdx = i
   }
 
+  async function uploadAudioBlob(layerId: string, blob: Blob, fileName: string): Promise<string | undefined> {
+    try {
+      const urlRes = await fetch('/api/sources/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceId: layerId, fileName, contentType: blob.type || 'audio/wav' }),
+      })
+      if (!urlRes.ok) return undefined
+      const { uploadUrl, s3Key } = await urlRes.json()
+      const up = await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': blob.type || 'audio/wav' } })
+      return up.ok ? s3Key : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  function findFreeTrack(
+    startAt: number,
+    duration: number,
+    claimed: { startAt: number; end: number; trackIndex: number }[],
+  ): number {
+    const end = startAt + duration
+    for (let t = 0; ; t++) {
+      const busy = claimed.filter(c => c.trackIndex === t)
+      if (!busy.some(c => startAt < c.end && end > c.startAt)) return t
+    }
+  }
+
   async function handleGenerateAll(voiceOverride?: TtsVoice) {
     if (generatingId) return
     const selectedVoice = voiceOverride ?? voice
@@ -236,31 +266,86 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
       setModelLoading(true)
       warmUpTTS()
       setGenerateProgress({ current: 0, total: eligible.length })
+
+      // Seed claimed intervals from existing layers so we don't overlap them
+      const claimed: { startAt: number; end: number; trackIndex: number }[] = audioLayers.map(l => ({
+        startAt: l.startAt,
+        end: l.startAt + (l.trimEnd - l.trimStart),
+        trackIndex: l.trackIndex ?? 0,
+      }))
+
       for (let i = 0; i < eligible.length; i++) {
         const { step, idx } = eligible[i]
         setGeneratingId(step.id)
         setGenerateProgress({ current: i + 1, total: eligible.length })
-        const blob      = await generateSpeech(step.description, selectedVoice)
-        const duration  = blob.size / 2 / 24000
-        const objectUrl = URL.createObjectURL(blob)
-        const layer: AudioLayer = {
-          id: crypto.randomUUID(),
+        const blob       = await generateSpeech(step.description, selectedVoice)
+        const duration   = blob.size / 2 / 24000
+        const layerId    = crypto.randomUUID()
+        const fileName   = `voiceover-step-${idx + 1}.wav`
+        const objectUrl  = URL.createObjectURL(blob)
+        const startAt    = positions[idx]
+        const trackIndex = findFreeTrack(startAt, duration, claimed)
+        claimed.push({ startAt, end: startAt + duration, trackIndex })
+        const s3Key = await uploadAudioBlob(layerId, blob, fileName)
+        addAudioLayer({
+          id: layerId,
           name: step.title || `Step ${idx + 1} voiceover`,
-          fileName: `voiceover-step-${idx + 1}.wav`,
+          fileName,
           objectUrl,
           duration,
           volume: 1,
-          startAt: positions[idx],
+          trackIndex,
+          startAt,
           trimStart: 0,
           trimEnd: duration,
-        }
-        addAudioLayer(layer)
+          ...(s3Key && { s3Key }),
+        })
       }
     } catch (err) {
       console.error('TTS error:', err)
     } finally {
       setGeneratingId(null)
       setGenerateProgress(null)
+      setModelLoading(false)
+    }
+  }
+
+  async function handleGenerateSingle(step: Step, idx: number) {
+    if (generatingId || !step.description.trim()) return
+    setModelLoading(true)
+    setGeneratingId(step.id)
+    try {
+      warmUpTTS()
+      const blob       = await generateSpeech(step.description, voice)
+      const duration   = blob.size / 2 / 24000
+      const layerId    = crypto.randomUUID()
+      const fileName   = `voiceover-step-${idx + 1}.wav`
+      const objectUrl  = URL.createObjectURL(blob)
+      const startAt    = positions[idx]
+      const claimed    = audioLayers.map(l => ({
+        startAt: l.startAt,
+        end: l.startAt + (l.trimEnd - l.trimStart),
+        trackIndex: l.trackIndex ?? 0,
+      }))
+      const trackIndex = findFreeTrack(startAt, duration, claimed)
+      const s3Key = await uploadAudioBlob(layerId, blob, fileName)
+      addAudioLayer({
+        id: layerId,
+        name: step.title || `Step ${idx + 1} voiceover`,
+        fileName,
+        objectUrl,
+        duration,
+        volume: 1,
+        trackIndex,
+        startAt,
+        trimStart: 0,
+        trimEnd: duration,
+        ...(s3Key && { s3Key }),
+      })
+    } catch (err) {
+      console.error('TTS error:', err)
+    } finally {
+      setGeneratingId(null)
       setModelLoading(false)
     }
   }
@@ -505,10 +590,32 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
                   {step.description.length}/1000
                 </p>
 
+                {/* Action row: AI enhance + generate voice */}
+                <div className="flex items-center gap-2 mt-2 flex-wrap" onClick={e => e.stopPropagation()}>
+
+                {/* Per-step voiceover button */}
+                {generatingId === step.id ? (
+                  <span className="flex items-center gap-1.5 text-[10px] text-violet-400">
+                    <span className="w-2.5 h-2.5 rounded-full border border-violet-500 border-t-transparent animate-spin shrink-0" />
+                    {modelLoading ? 'Loading…' : 'Generating…'}
+                  </span>
+                ) : (
+                  <button
+                    disabled={!step.description.trim() || !!generatingId}
+                    onClick={() => handleGenerateSingle(step, i)}
+                    title="Generate voiceover for this step"
+                    className="flex items-center gap-1.5 text-[10px] px-2 py-1 rounded border border-neutral-700 text-neutral-400 hover:border-violet-800 hover:text-violet-400 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                  >
+                    <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4M9 11V7a3 3 0 016 0v4" />
+                    </svg>
+                    Generate voice
+                  </button>
+                )}
+
                 {/* AI enhance dropdown */}
                 <div
-                  className="relative mt-2"
-                  onClick={e => e.stopPropagation()}
+                  className="relative"
                   ref={aiOpenId === step.id ? aiDropdownRef : undefined}
                 >
                   {aiLoadingId === step.id ? (
@@ -528,7 +635,7 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
                       <svg className="w-3 h-3 shrink-0" viewBox="0 0 24 24" fill="currentColor">
                         <path d="M12 2l2.4 7.4H22l-6.2 4.5 2.4 7.4L12 17l-6.2 4.3 2.4-7.4L2 9.4h7.6z"/>
                       </svg>
-                      Enhance Content
+                      Enhance
                       <svg className={`w-2.5 h-2.5 shrink-0 transition-transform ${aiOpenId === step.id ? 'rotate-180' : ''}`} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
                       </svg>
@@ -582,6 +689,8 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
                     </div>
                   )}
                 </div>
+
+                </div>{/* end action row */}
 
               </div>
             </div>

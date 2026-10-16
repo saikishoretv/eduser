@@ -1,6 +1,7 @@
 'use client'
 
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useCallback, useState } from 'react'
+import type { ShapeLayer } from '@/types'
 import { useEditorStore } from '@/store/store'
 import { ZoomPreset, TransitionType } from '@/store/store'
 import { getClipTimings, formatTime } from '@/lib/clipUtils'
@@ -8,6 +9,20 @@ import { ClipTiming } from '@/lib/clipUtils'
 import { hexToRgba } from '@/lib/subtitleTemplates'
 import { toCssFilter, COLOR_CORRECTION_DEFAULT } from '@/lib/colorPresets'
 import CCSelector from './CCSelector'
+import { SubtitlePosition } from '@/store/store'
+
+// Stable empty-array constants — prevents `?? []` from creating new references
+// on every render, which would break useSyncExternalStore and cause infinite loops.
+const EMPTY_CC_SEGMENTS: never[] = []
+
+function subPositionClass(pos: SubtitlePosition): string {
+  switch (pos) {
+    case 'top':    return 'absolute top-6 left-0 right-0 flex justify-center pointer-events-none px-4'
+    case 'left':   return 'absolute top-1/2 left-4 -translate-y-1/2 flex justify-start pointer-events-none max-w-[40%]'
+    case 'right':  return 'absolute top-1/2 right-4 -translate-y-1/2 flex justify-end pointer-events-none max-w-[40%]'
+    default:       return 'absolute bottom-8 left-0 right-0 flex justify-center pointer-events-none px-4'
+  }
+}
 
 function calcAnimatedState(
   preset: ZoomPreset,
@@ -103,6 +118,65 @@ const EMPTY_CLIPS: import('@/types').Clip[] = []
 const EMPTY_SOURCES: import('@/types').SourceVideo[] = []
 const EMPTY_AUDIO_LAYERS: import('@/types').AudioLayer[] = []
 const EMPTY_OVERLAY_LAYERS: import('@/types').OverlayLayer[] = []
+const EMPTY_SHAPE_LAYERS: import('@/types').ShapeLayer[] = []
+
+// Each handle: [relX, relY] (0=left/top, 0.5=mid, 1=right/bottom), cursor
+const RESIZE_HANDLES: [number, number, string][] = [
+  [0,   0,   'nw-resize'],
+  [0.5, 0,   'n-resize' ],
+  [1,   0,   'ne-resize'],
+  [1,   0.5, 'e-resize' ],
+  [1,   1,   'se-resize'],
+  [0.5, 1,   's-resize' ],
+  [0,   1,   'sw-resize'],
+  [0,   0.5, 'w-resize' ],
+]
+
+// Draws the rectangle stroke as a clockwise draw-on animation starting from the top-right corner.
+// Measures the SVG viewport after mount so arc radii are in actual pixels.
+function ShapeStroke({ shape }: { shape: ShapeLayer }) {
+  const svgRef = useRef<SVGSVGElement>(null)
+  const [d, setD] = useState('')
+
+  useLayoutEffect(() => {
+    const el = svgRef.current
+    if (!el) return
+    const { width: W, height: H } = el.getBoundingClientRect()
+    const r = Math.max(0, Math.min(shape.borderRadius, W / 2, H / 2))
+    if (r <= 0) {
+      setD(`M ${W},0 L ${W},${H} L 0,${H} L 0,0 Z`)
+    } else {
+      setD(
+        `M ${W - r},0 A ${r},${r} 0 0,1 ${W},${r} ` +
+        `L ${W},${H - r} A ${r},${r} 0 0,1 ${W - r},${H} ` +
+        `L ${r},${H} A ${r},${r} 0 0,1 0,${H - r} ` +
+        `L 0,${r} A ${r},${r} 0 0,1 ${r},0 Z`
+      )
+    }
+  }, [shape.width, shape.height, shape.borderRadius])
+
+  return (
+    <svg
+      ref={svgRef}
+      width="100%" height="100%"
+      style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}
+    >
+      {d && (
+        <path
+          d={d}
+          pathLength="1"
+          fill="none"
+          stroke={shape.strokeColor}
+          strokeOpacity={shape.strokeOpacity}
+          strokeWidth={shape.strokeWidth}
+          strokeDasharray="1"
+          strokeDashoffset="1"
+          className="shape-draw-on"
+        />
+      )}
+    </svg>
+  )
+}
 
 export default function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -116,6 +190,11 @@ export default function Preview() {
   const imageClipPlayheadStartRef = useRef<number>(0)
   const dragRef = useRef<{ startX: number; startY: number; cropX: number; cropY: number; clipId: string } | null>(null)
   const overlayDragRef = useRef<{ startX: number; startY: number; ox: number; oy: number; id: string } | null>(null)
+  const shapeDragRef = useRef<
+    | { id: string; mode: 'move'; startX: number; startY: number; ox: number; oy: number }
+    | { id: string; mode: 'resize'; startX: number; startY: number; ox: number; oy: number; ow: number; oh: number; fixedX: number; fixedY: number; movingStartX: number; movingStartY: number; affectsX: boolean; affectsY: boolean }
+    | null
+  >(null)
 
   const clips       = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
   const sources     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.sources ?? EMPTY_SOURCES)
@@ -142,7 +221,9 @@ export default function Preview() {
   const clipTransitionOut = useEditorStore(s => s.clipTransitionOut)
   const clipColorCorrections = useEditorStore(s => s.clipColorCorrections)
   const clipSpeeds = useEditorStore(s => s.clipSpeeds)
-  const subtitleStyle = useEditorStore(s => s.subtitleStyle)
+  const subtitleStyle    = useEditorStore(s => s.subtitleStyle)
+  const subtitlePosition = useEditorStore(s => s.subtitlePosition)
+  const subtitleFontSize = useEditorStore(s => s.subtitleFontSize)
   const subtitleAppearance = useEditorStore(s => s.subtitleAppearance)
   const standardSubtitleAppearance = useEditorStore(s => s.standardSubtitleAppearance)
   const setPlayhead = useEditorStore(s => s.setPlayhead)
@@ -152,7 +233,10 @@ export default function Preview() {
   const pendingFreezeFrame  = useEditorStore(s => s.pendingFreezeFrame)
   const executeFreezeFrame  = useEditorStore(s => s.executeFreezeFrame)
   const cancelFreezeFrame   = useEditorStore(s => s.cancelFreezeFrame)
-
+  const shapeLayers        = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_SHAPE_LAYERS)
+  const selectedShapeId    = useEditorStore(s => s.selectedShapeId)
+  const setSelectedShapeId = useEditorStore(s => s.setSelectedShapeId)
+  const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
   const timings = getClipTimings(clips, clipSpeeds)
   const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
   const clipKey = clips.map(c => `${c.id}:${c.trimStart}:${c.trimEnd}:${clipSpeeds[c.id] ?? 1}`).join('|')
@@ -165,8 +249,8 @@ export default function Preview() {
   const activeClipId = activeTiming?.clip.id ?? null
   const activeClipBackground = activeTiming?.clip.background ?? null
   const currentCrop = activeClipId ? (clipCrops[activeClipId] ?? { x: 50, y: 50 }) : { x: 50, y: 50 }
+  const currentZoom = activeClipId ? (clipZooms[activeClipId] ?? 1) : 1
 
-  // Subtitles: map current timeline time → source time → active transcript segment
   const activeSource = activeTiming
     ? sources.find(s => s.id === activeTiming.clip.sourceId)
     : null
@@ -176,25 +260,33 @@ export default function Preview() {
   const isImageClip      = !!activeSource?.isImage
   const isBackgroundClip = !!activeClipBackground
   console.log('[render] isImageClip:', isImageClip, 'ph:', playheadTime.toFixed(2), 'src:', activeSource?.id, 'objUrl:', activeSource?.objectUrl?.slice(0,30))
-  const currentSourceTime = activeTiming
-    ? activeTiming.clip.trimStart + ((previewTime ?? playheadTime) - activeTiming.start) * (clipSpeeds[activeTiming.clip.id] ?? 1)
-    : 0
-  // Use translated transcript when active, fall back to original
-  const activeTranscript = activeSource?.translatedTranscript ?? activeSource?.transcript
-  const activeSegment = activeTranscript?.find(
-    seg => currentSourceTime >= seg.start && currentSourceTime < seg.end
-  ) ?? null
-  const hasTranscript = !!(activeSource?.transcript?.length)
+
+  // Subtitles: use ccSegments (timeline-time based) for direct lookup — no source-time mapping needed
+  const ccSegments  = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.ccSegments ?? EMPTY_CC_SEGMENTS)
+  const t           = previewTime ?? playheadTime
+  const activeSegment = ccSegments.find(seg => t >= seg.startAt && t < seg.endAt) ?? null
+  const hasCc       = ccSegments.length > 0
 
   // For highlight mode: find current word and build a 4-word display window
   const words = activeSegment?.words ?? []
-  const currentWordIdx = words.findIndex(w => currentSourceTime >= w.start && currentSourceTime < w.end)
+  const currentWordIdx = words.findIndex(w => t >= w.startAt && t < w.endAt)
   const anchorIdx = currentWordIdx >= 0
     ? currentWordIdx
-    : words.findLastIndex(w => w.start <= currentSourceTime)
+    : words.findLastIndex(w => w.startAt <= t)
   const windowStart = Math.max(0, anchorIdx - 1)
   const windowEnd = Math.min(words.length, windowStart + 4)
   const displayWords = words.slice(windowStart, windowEnd)
+
+  // Aspect ratio for the preview container — always constrained so background/image clips
+  // don't stretch to fill the entire preview area.
+  const previewAspect = outputFormat
+    ? outputFormat.aspectW / outputFormat.aspectH
+    : (() => {
+        // Fall back to the first real video source's dimensions, then 16:9
+        const firstVideoSrc = sources.find(src => !src.isImage && clips.some(c => c.sourceId === src.id))
+        if (firstVideoSrc?.width && firstVideoSrc?.height) return firstVideoSrc.width / firstVideoSrc.height
+        return 16 / 9
+      })()
 
   // Mutable ref so RAF/timeupdate always see the latest sources without re-registering effects
   const sourcesRef = useRef(sources)
@@ -275,6 +367,12 @@ export default function Preview() {
       const inRange  = offset >= 0 && t < layerEnd
       if (inRange) {
         const sourceTime = layer.trimStart + offset
+        let vol = layer.volume
+        const fadeIn  = layer.fadeIn  ?? 0
+        const fadeOut = layer.fadeOut ?? 0
+        if (fadeIn  > 0 && offset < fadeIn)              vol *= offset / fadeIn
+        if (fadeOut > 0 && (layerEnd - t) < fadeOut)     vol *= (layerEnd - t) / fadeOut
+        el.volume = Math.max(0, Math.min(1, vol))
         if (Math.abs(el.currentTime - sourceTime) > 0.15) el.currentTime = sourceTime
         if (play && el.paused) el.play().catch(() => {})
       } else {
@@ -311,6 +409,7 @@ export default function Preview() {
     }
     // Normal video clip — display handled reactively; just set src/time
     if (video.src !== source.objectUrl) video.src = source.objectUrl
+    video.muted = audioLayersRef.current.some(l => l.detachedFromSourceId === source.id)
     video.currentTime = seekTo
     video.playbackRate = clipSpeedsRef.current[timing.clip.id] ?? 1
     const cc = clipColorCorrectionsRef.current[timing.clip.id] ?? COLOR_CORRECTION_DEFAULT
@@ -526,7 +625,7 @@ export default function Preview() {
 
   // Drag-to-pan handlers (direct DOM mutation for smooth dragging, commit to store on mouseup)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    if (!outputFormat || !activeClipId) return
+    if (!activeClipId || (currentZoom <= 1 && !outputFormat)) return
     e.preventDefault()
     pushUndo()
     dragRef.current = {
@@ -536,7 +635,7 @@ export default function Preview() {
       cropY: currentCrop.y,
       clipId: activeClipId,
     }
-  }, [outputFormat, activeClipId, currentCrop, pushUndo])
+  }, [outputFormat, activeClipId, currentCrop, currentZoom, pushUndo])
 
   useEffect(() => {
     const handleMove = (e: MouseEvent) => {
@@ -596,6 +695,45 @@ export default function Preview() {
     }
   }, [updateOverlayLayer])
 
+  // Shape drag + resize handlers
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => {
+      const drag = shapeDragRef.current
+      if (!drag) return
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const dxPct = (e.clientX - drag.startX) / rect.width  * 100
+      const dyPct = (e.clientY - drag.startY) / rect.height * 100
+      if (drag.mode === 'move') {
+        updateShapeLayer(drag.id, {
+          x: Math.max(0, Math.min(100, drag.ox + dxPct)),
+          y: Math.max(0, Math.min(100, drag.oy + dyPct)),
+        })
+      } else {
+        let newX = drag.ox, newW = drag.ow, newY = drag.oy, newH = drag.oh
+        if (drag.affectsX) {
+          const movingX = drag.movingStartX + dxPct
+          newW = Math.max(2, Math.abs(drag.fixedX - movingX))
+          newX = (drag.fixedX + movingX) / 2
+        }
+        if (drag.affectsY) {
+          const movingY = drag.movingStartY + dyPct
+          newH = Math.max(2, Math.abs(drag.fixedY - movingY))
+          newY = (drag.fixedY + movingY) / 2
+        }
+        updateShapeLayer(drag.id, { x: newX, y: newY, width: newW, height: newH })
+      }
+    }
+    const handleUp = () => { shapeDragRef.current = null }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [updateShapeLayer])
+
   return (
     <div className="flex flex-col h-full bg-black">
       <div className="flex-1 flex items-center justify-center overflow-hidden min-h-0">
@@ -604,15 +742,12 @@ export default function Preview() {
             ref={containerRef}
             onMouseDown={handleMouseDown}
             className="relative overflow-hidden bg-black"
-            style={outputFormat
-              ? {
-                  aspectRatio: `${outputFormat.aspectW}/${outputFormat.aspectH}`,
-                  maxHeight: '100%',
-                  maxWidth: '100%',
-                  cursor: 'grab',
-                }
-              : { width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }
-            }
+            style={{
+              aspectRatio: String(previewAspect),
+              maxWidth: '100%',
+              maxHeight: '100%',
+              cursor: 'grab',
+            }}
           >
             {/* Background color/gradient clip fill */}
             {activeClipBackground && (
@@ -622,10 +757,14 @@ export default function Preview() {
               ref={videoRef}
               playsInline
               crossOrigin="anonymous"
-              className={outputFormat ? 'w-full h-full' : 'max-h-full max-w-full'}
+              className="w-full h-full"
               style={{
-                ...(outputFormat ? { objectFit: 'cover' as const, objectPosition: `${currentCrop.x}% ${currentCrop.y}%` } : undefined),
-                display: (isBackgroundClip || isImageClip) ? 'none' : '',
+                objectFit: 'cover',
+                objectPosition: `${currentCrop.x}% ${currentCrop.y}%`,
+                // visibility:hidden keeps the video in layout flow so the container
+                // retains its size (needed for background/image clips where there is
+                // no other in-flow content to size the aspect-ratio container).
+                visibility: (isBackgroundClip || isImageClip) ? 'hidden' : 'visible',
               }}
             />
             {/* Freeze frame / image clip — always mounted (like <video>) so display is instant;
@@ -655,10 +794,18 @@ export default function Preview() {
             />
             {/* Subtitle overlay */}
             {activeSegment && subtitleStyle === 'standard' && (
-              <div className="absolute bottom-8 left-0 right-0 flex justify-center pointer-events-none px-4">
+              <div className={subPositionClass(subtitlePosition)}>
                 <div
-                  className="text-sm font-medium px-3 py-1.5 rounded max-w-full text-center leading-snug"
+                  className="font-medium px-3 py-1.5 rounded leading-snug"
                   style={{
+                    fontSize: `${subtitleFontSize * 0.875}rem`,
+                    maxWidth: '70%',
+                    wordBreak: 'break-word',
+                    display: '-webkit-box',
+                    WebkitLineClamp: 3,
+                    WebkitBoxOrient: 'vertical',
+                    overflow: 'hidden',
+                    textAlign: (subtitlePosition === 'left' || subtitlePosition === 'right') ? subtitlePosition : 'center',
                     color: standardSubtitleAppearance.textColor,
                     background: standardSubtitleAppearance.bgOpacity > 0
                       ? hexToRgba(standardSubtitleAppearance.bgColor, standardSubtitleAppearance.bgOpacity)
@@ -670,24 +817,30 @@ export default function Preview() {
               </div>
             )}
             {activeSegment && subtitleStyle === 'highlight' && displayWords.length > 0 && (
-              <div className="absolute bottom-8 left-0 right-0 flex justify-center pointer-events-none px-4">
+              <div className={subPositionClass(subtitlePosition)}>
                 <div
-                  className="px-4 py-2 rounded-xl flex items-center gap-1.5 flex-wrap justify-center"
-                  style={subtitleAppearance.bgOpacity > 0
-                    ? { background: hexToRgba(subtitleAppearance.bgColor, subtitleAppearance.bgOpacity) }
-                    : undefined
-                  }
+                  className="px-4 py-2 rounded-xl flex flex-wrap gap-1.5"
+                  style={{
+                    maxWidth: '70%',
+                    justifyContent: (subtitlePosition === 'left') ? 'flex-start' : (subtitlePosition === 'right') ? 'flex-end' : 'center',
+                    alignItems: 'center',
+                    ...(subtitleAppearance.bgOpacity > 0
+                      ? { background: hexToRgba(subtitleAppearance.bgColor, subtitleAppearance.bgOpacity) }
+                      : {}),
+                  }}
                 >
                   {displayWords.map((w, i) => {
                     const isActive = windowStart + i === currentWordIdx
                     return (
                       <span
                         key={windowStart + i}
-                        className="text-base font-bold"
-                        style={isActive
-                          ? { color: subtitleAppearance.highlightColor }
-                          : { color: subtitleAppearance.inactiveColor, opacity: subtitleAppearance.inactiveOpacity }
-                        }
+                        className="font-bold"
+                        style={{
+                          fontSize: `${subtitleFontSize}rem`,
+                          ...(isActive
+                            ? { color: subtitleAppearance.highlightColor }
+                            : { color: subtitleAppearance.inactiveColor, opacity: subtitleAppearance.inactiveOpacity }),
+                        }}
                       >
                         {w.word}
                       </span>
@@ -696,6 +849,71 @@ export default function Preview() {
                 </div>
               </div>
             )}
+
+            {/* Shape layers */}
+            <div className="absolute inset-0 pointer-events-none">
+              {shapeLayers.map(shape => {
+                if (t < shape.startAt || t >= shape.startAt + shape.duration) return null
+                const isSel = selectedShapeId === shape.id
+                return (
+                  <div
+                    key={shape.id}
+                    className="absolute pointer-events-auto"
+                    style={{
+                      left: `${shape.x}%`,
+                      top: `${shape.y}%`,
+                      width: `${shape.width}%`,
+                      height: `${shape.height}%`,
+                      transform: 'translate(-50%, -50%)',
+                      opacity: shape.opacity,
+                      outline: isSel ? '2px solid #60a5fa' : 'none',
+                      outlineOffset: '2px',
+                      cursor: 'move',
+                    }}
+                    onClick={e => { e.stopPropagation(); setSelectedShapeId(shape.id) }}
+                    onMouseDown={e => {
+                      e.stopPropagation()
+                      setSelectedShapeId(shape.id)
+                      shapeDragRef.current = { id: shape.id, mode: 'move', startX: e.clientX, startY: e.clientY, ox: shape.x, oy: shape.y }
+                    }}
+                  >
+                    <ShapeStroke shape={shape} />
+
+                    {isSel && RESIZE_HANDLES.map(([relX, relY, cursor]) => (
+                      <div
+                        key={`${relX}-${relY}`}
+                        className="absolute z-10"
+                        style={{
+                          width: 8, height: 8,
+                          left: `${relX * 100}%`, top: `${relY * 100}%`,
+                          transform: 'translate(-50%, -50%)',
+                          cursor,
+                          background: 'white',
+                          border: '1.5px solid #3b82f6',
+                          borderRadius: 1,
+                        }}
+                        onMouseDown={e => {
+                          e.stopPropagation()
+                          const affectsX = relX !== 0.5
+                          const affectsY = relY !== 0.5
+                          shapeDragRef.current = {
+                            id: shape.id, mode: 'resize',
+                            startX: e.clientX, startY: e.clientY,
+                            ox: shape.x, oy: shape.y, ow: shape.width, oh: shape.height,
+                            fixedX: shape.x + shape.width  * (0.5 - relX),
+                            fixedY: shape.y + shape.height * (0.5 - relY),
+                            movingStartX: shape.x + shape.width  * (relX - 0.5),
+                            movingStartY: shape.y + shape.height * (relY - 0.5),
+                            affectsX, affectsY,
+                          }
+                        }}
+                      />
+                    ))}
+                  </div>
+                )
+              })}
+            </div>
+
             {/* Overlay layers — absolute inset-0 wrapper gives a reliable full-size
                 positioning context regardless of the parent's flex layout */}
             <div className="absolute inset-0 overflow-hidden pointer-events-none">
@@ -772,9 +990,10 @@ export default function Preview() {
             </div>
 
             {/* Format label + drag hint */}
-            {outputFormat && (
+            {(outputFormat || currentZoom > 1) && (
               <div className="absolute bottom-2 left-2 flex items-center gap-1.5 bg-black/50 rounded px-2 py-1 pointer-events-none">
-                <span className="text-[10px] text-white/60 font-medium">{outputFormat.aspectW}:{outputFormat.aspectH}</span>
+                {outputFormat && <span className="text-[10px] text-white/60 font-medium">{outputFormat.aspectW}:{outputFormat.aspectH}</span>}
+                {currentZoom > 1 && <span className="text-[10px] text-white/60 font-medium">{currentZoom}×</span>}
                 <span className="text-[10px] text-white/40">· drag to reposition</span>
               </div>
             )}
@@ -806,8 +1025,8 @@ export default function Preview() {
           {formatTime(previewTime ?? playheadTime)} / {formatTime(totalDuration)}
         </span>
 
-        {/* CC selector — shown only when transcript exists */}
-        {hasTranscript && (
+        {/* CC selector — shown only when CC segments exist */}
+        {hasCc && (
           <div className="absolute right-3">
             <CCSelector />
           </div>

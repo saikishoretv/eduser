@@ -3,11 +3,12 @@
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useEditorStore } from '@/store/store'
 import { getClipTimings, formatTime } from '@/lib/clipUtils'
-import { AudioLayer, Step } from '@/types'
+import { AudioLayer, Step, ShapeLayer } from '@/types'
 import TimeRuler from './TimeRuler'
 import ClipItem from './ClipItem'
 import AudioLayerItem from './AudioLayerItem'
 import OverlayItem from './OverlayItem'
+import ShapeItem from './ShapeItem'
 import BackgroundClipPicker from './BackgroundClipPicker'
 import ClipReorderOverlay from './ClipReorderOverlay'
 
@@ -16,6 +17,7 @@ const EMPTY_CLIPS: import('@/types').Clip[] = []
 const EMPTY_AUDIO_LAYERS: AudioLayer[] = []
 const EMPTY_OVERLAY_LAYERS: import('@/types').OverlayLayer[] = []
 const EMPTY_STEPS: Step[] = []
+const EMPTY_SHAPE_LAYERS: ShapeLayer[] = []
 
 // Must match COLORS in ClipItem and STEP_ACCENTS in AudioLayerItem
 const STEP_BG_COLORS = [
@@ -65,6 +67,10 @@ export default function Timeline() {
   const audioLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_AUDIO_LAYERS)
   const overlayLayers = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.overlayLayers ?? EMPTY_OVERLAY_LAYERS)
   const steps         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.steps ?? EMPTY_STEPS)
+  const shapeLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_SHAPE_LAYERS)
+  const selectedShapeId    = useEditorStore(s => s.selectedShapeId)
+  const setSelectedShapeId = useEditorStore(s => s.setSelectedShapeId)
+  const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
   const updateStep    = useEditorStore(s => s.updateStep)
   const moveStep      = useEditorStore(s => s.moveStep)
   const addStep       = useEditorStore(s => s.addStep)
@@ -80,8 +86,11 @@ export default function Timeline() {
   const clearSelection = useEditorStore(s => s.clearSelection)
   const setSelectedAudioLayerId = useEditorStore(s => s.setSelectedAudioLayerId)
   const setSelectedOverlayId    = useEditorStore(s => s.setSelectedOverlayId)
-  const addAudioLayer        = useEditorStore(s => s.addAudioLayer)
-  const addOverlayLayer      = useEditorStore(s => s.addOverlayLayer)
+  const addAudioLayer           = useEditorStore(s => s.addAudioLayer)
+  const updateAudioLayer        = useEditorStore(s => s.updateAudioLayer)
+  const resolveAudioConflicts   = useEditorStore(s => s.resolveAudioConflicts)
+  const pushUndo                = useEditorStore(s => s.pushUndo)
+  const addOverlayLayer         = useEditorStore(s => s.addOverlayLayer)
   const addSourceToProject   = useEditorStore(s => s.addSourceToProject)
   const addBackgroundClip    = useEditorStore(s => s.addBackgroundClip)
   const reorderClips         = useEditorStore(s => s.reorderClips)
@@ -117,6 +126,20 @@ export default function Timeline() {
     clipId: string; mouseX: number; mouseY: number
   } | null>(null)
   const clipDragRef = useRef<{ clipId: string; startX: number } | null>(null)
+
+  // Audio cross-track drag
+  const audioDragRef = useRef<{
+    layerId: string
+    startClientX: number
+    startClientY: number
+    startAt: number
+    startTrack: number
+    audioStartY: number
+    rowH: number
+    rowGap: number
+    numTracks: number
+    zoom: number
+  } | null>(null)
 
   // Step marker drag — track in local state to avoid store churn during drag
   const [markerDrag, setMarkerDrag] = useState<{ stepId: string; x: number } | null>(null)
@@ -166,11 +189,14 @@ export default function Timeline() {
   const STEPS_H       = steps.length > 0 ? 22 : 0   // step marker row, only when project has steps
   const CLIPS_TOP     = RULER_H + STEPS_H
   const CLIPS_H       = 52
-  const AUDIO_START   = CLIPS_TOP + CLIPS_H + 8
+  const SHAPES_ROW_H  = 32
+  const SHAPES_START  = CLIPS_TOP + CLIPS_H + 8
+  const AUDIO_START   = SHAPES_START + SHAPES_ROW_H + 8
   const AUDIO_ROW_H   = 36
   const AUDIO_ROW_GAP = 4
 
-  const numAudioRows    = Math.max(1, audioLayers.length)
+  const numTracks       = audioLayers.length === 0 ? 1 : Math.max(...audioLayers.map(l => (l.trackIndex ?? 0))) + 1
+  const numAudioRows    = numTracks
   const OVERLAY_ROW_H   = 32
   const OVERLAY_ROW_GAP = 4
   const OVERLAY_START   = AUDIO_START + numAudioRows * (AUDIO_ROW_H + AUDIO_ROW_GAP) + 8
@@ -227,26 +253,87 @@ export default function Timeline() {
     setPreviewTime(null)
   }, [setPreviewTime])
 
+  function handleAudioBodyMouseDown(layer: AudioLayer) {
+    return (e: React.MouseEvent) => {
+      e.stopPropagation()
+      pushUndo()
+      const currentNumTracks = audioLayers.length === 0 ? 1 : Math.max(...audioLayers.map(l => (l.trackIndex ?? 0))) + 1
+      audioDragRef.current = {
+        layerId: layer.id,
+        startClientX: e.clientX,
+        startClientY: e.clientY,
+        startAt: layer.startAt,
+        startTrack: layer.trackIndex ?? 0,
+        audioStartY: AUDIO_START,
+        rowH: AUDIO_ROW_H,
+        rowGap: AUDIO_ROW_GAP,
+        numTracks: currentNumTracks,
+        zoom,
+      }
+
+      const handleMove = (ev: MouseEvent) => {
+        const drag = audioDragRef.current
+        if (!drag) return
+        const newStartAt = Math.max(0, drag.startAt + (ev.clientX - drag.startClientX) / drag.zoom)
+
+        const scrollEl = scrollRef.current
+        let newTrackIndex = drag.startTrack
+        if (scrollEl) {
+          const rect = scrollEl.getBoundingClientRect()
+          const relY = ev.clientY - rect.top + scrollEl.scrollTop - drag.audioStartY
+          const raw = Math.floor(relY / (drag.rowH + drag.rowGap))
+          // Allow one track beyond existing to create a new row on drop
+          newTrackIndex = Math.max(0, Math.min(raw, drag.numTracks))
+        }
+
+        updateAudioLayer(drag.layerId, { startAt: newStartAt, trackIndex: newTrackIndex })
+      }
+
+      const handleUp = () => {
+        const drag = audioDragRef.current
+        audioDragRef.current = null
+        if (drag) resolveAudioConflicts(drag.layerId)
+        window.removeEventListener('mousemove', handleMove)
+        window.removeEventListener('mouseup', handleUp)
+      }
+
+      window.addEventListener('mousemove', handleMove)
+      window.addEventListener('mouseup', handleUp)
+    }
+  }
+
   async function handleAudioFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
     e.target.value = ''
     setUploading(true)
     try {
+      const layerId   = crypto.randomUUID()
       const objectUrl = URL.createObjectURL(file)
       const duration  = await getAudioDuration(objectUrl)
-      const layer: AudioLayer = {
-        id: crypto.randomUUID(),
+
+      // Upload to S3 so objectUrl can be restored on reload
+      const urlRes = await fetch('/api/sources/upload-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sourceId: layerId, fileName: file.name, contentType: file.type }),
+      })
+      const { uploadUrl, s3Key } = await urlRes.json()
+      await fetch(uploadUrl, { method: 'PUT', body: file, headers: { 'Content-Type': file.type } })
+
+      addAudioLayer({
+        id: layerId,
         name: file.name.replace(/\.[^.]+$/, ''),
         fileName: file.name,
         objectUrl,
         duration,
         volume: 0.8,
+        trackIndex: 0,
         startAt: 0,
         trimStart: 0,
         trimEnd: duration,
-      }
-      addAudioLayer(layer)
+        s3Key,
+      })
     } finally {
       setUploading(false)
     }
@@ -604,16 +691,17 @@ export default function Timeline() {
               <span className="text-[9px] text-neutral-600 uppercase tracking-wider">Video</span>
             </div>
           </div>
-          {audioLayers.length === 0 ? (
-            <div className="absolute left-0 pointer-events-none" style={{ top: AUDIO_START, height: AUDIO_ROW_H, width: 40 }}>
-              <div className="flex items-center h-full px-1">
-                <span className="text-[9px] text-neutral-600 uppercase tracking-wider">Audio</span>
-              </div>
+          <div className="absolute left-0 pointer-events-none" style={{ top: SHAPES_START, height: SHAPES_ROW_H, width: 40 }}>
+            <div className="flex items-center h-full px-1">
+              <span className="text-[9px] text-neutral-600 uppercase tracking-wider">Shps</span>
             </div>
-          ) : audioLayers.map((layer, i) => (
-            <div key={layer.id} className="absolute left-0 pointer-events-none" style={{ top: getLayerTop(i), height: AUDIO_ROW_H, width: 40 }}>
+          </div>
+          {Array.from({ length: numTracks }, (_, trackIdx) => (
+            <div key={trackIdx} className="absolute left-0 pointer-events-none" style={{ top: getLayerTop(trackIdx), height: AUDIO_ROW_H, width: 40 }}>
               <div className="flex items-center h-full px-1">
-                <span className="text-[9px] text-neutral-600 uppercase tracking-wider">A{i + 1}</span>
+                <span className="text-[9px] text-neutral-600 uppercase tracking-wider">
+                  {numTracks === 1 ? 'Audio' : `A${trackIdx + 1}`}
+                </span>
               </div>
             </div>
           ))}
@@ -625,7 +713,6 @@ export default function Timeline() {
                 key={timing.clip.id}
                 timing={timing}
                 zoom={zoom}
-                stepColorIdx={stepColorIdxForTime(timing.start, sortedStepPositions)}
                 onBodyMouseDown={e => {
                   e.stopPropagation()
                   clipDragRef.current = { clipId: timing.clip.id, startX: e.clientX }
@@ -651,31 +738,59 @@ export default function Timeline() {
             ))}
           </div>
 
-          {/* Audio layer rows — one row per layer */}
-          {audioLayers.length === 0 ? (
-            <div
-              className="absolute left-0 right-0 rounded"
-              style={{ top: AUDIO_START, height: AUDIO_ROW_H, background: 'rgba(255,255,255,0.02)' }}
-            >
-              <div className="flex items-center h-full px-2">
-                <span className="text-[10px] text-neutral-700">No audio layers · click "+ Add audio" to add</span>
+          {/* Shapes row */}
+          <div
+            className="absolute left-0 right-0 rounded"
+            style={{ top: SHAPES_START, height: SHAPES_ROW_H, background: 'rgba(255,255,255,0.02)' }}
+            onClick={e => { e.stopPropagation(); setSelectedShapeId(null) }}
+          >
+            {shapeLayers.length === 0 && (
+              <div className="flex items-center h-full px-2 pointer-events-none">
+                <span className="text-[10px] text-neutral-700">No shapes · click "Add Rectangle" in the toolbar</span>
               </div>
-            </div>
-          ) : audioLayers.map((layer, i) => (
-            <div
-              key={layer.id}
-              className="absolute left-0 right-0 rounded"
-              style={{ top: getLayerTop(i), height: AUDIO_ROW_H, background: 'rgba(255,255,255,0.02)' }}
-              onClick={e => { e.stopPropagation(); setSelectedAudioLayerId(layer.id) }}
-            >
-              <AudioLayerItem
-                layer={layer}
+            )}
+            {shapeLayers.map(shape => (
+              <ShapeItem
+                key={shape.id}
+                shape={shape}
                 zoom={zoom}
-                selected={selectedAudioLayerId === layer.id}
-                stepColorIdx={stepColorIdxForTime(layer.startAt, sortedStepPositions)}
+                rowTop={0}
+                rowH={SHAPES_ROW_H}
+                selected={selectedShapeId === shape.id}
+                onSelect={() => setSelectedShapeId(selectedShapeId === shape.id ? null : shape.id)}
+                onUpdate={patch => updateShapeLayer(shape.id, patch)}
               />
-            </div>
-          ))}
+            ))}
+          </div>
+
+          {/* Audio rows — one row per track, each track can hold multiple clips */}
+          {Array.from({ length: numTracks }, (_, trackIdx) => {
+            const trackLayers = audioLayers.filter(l => (l.trackIndex ?? 0) === trackIdx)
+            return (
+              <div
+                key={trackIdx}
+                className="absolute left-0 right-0 rounded"
+                style={{ top: getLayerTop(trackIdx), height: AUDIO_ROW_H, background: 'rgba(255,255,255,0.02)' }}
+                onClick={e => { e.stopPropagation(); setSelectedAudioLayerId(null) }}
+              >
+                {trackLayers.length === 0 && (
+                  <div className="flex items-center h-full px-2 pointer-events-none">
+                    <span className="text-[10px] text-neutral-700">Drop audio here</span>
+                  </div>
+                )}
+                {trackLayers.map(layer => (
+                  <AudioLayerItem
+                    key={layer.id}
+                    layer={layer}
+                    zoom={zoom}
+                    selected={selectedAudioLayerId === layer.id}
+                    stepColorIdx={stepColorIdxForTime(layer.startAt, sortedStepPositions)}
+                    onBodyMouseDown={handleAudioBodyMouseDown(layer)}
+                  />
+                ))}
+              </div>
+            )
+          })}
 
           {/* Overlay layer rows */}
           {overlayLayers.length === 0 ? (

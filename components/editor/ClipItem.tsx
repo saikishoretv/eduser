@@ -16,11 +16,10 @@ const COLORS = [
 interface Props {
   timing: ClipTiming
   zoom: number
-  stepColorIdx?: number
   onBodyMouseDown?: (e: React.MouseEvent) => void
 }
 
-export default function ClipItem({ timing, zoom, stepColorIdx, onBodyMouseDown }: Props) {
+export default function ClipItem({ timing, zoom, onBodyMouseDown }: Props) {
   const { clip, start, duration, index } = timing
 
   const isSelected = useEditorStore(s => s.selectedClipIds.includes(clip.id))
@@ -32,7 +31,9 @@ export default function ClipItem({ timing, zoom, stepColorIdx, onBodyMouseDown }
   const pushUndo                = useEditorStore(s => s.pushUndo)
   const sourceDuration          = useEditorStore(s => {
     if (clip.background) return 300
-    return s.projects.find(p => p.id === s.activeProjectId)?.sources.find(src => src.id === clip.sourceId)?.duration ?? clip.trimEnd
+    const src = s.projects.find(p => p.id === s.activeProjectId)?.sources.find(src => src.id === clip.sourceId)
+    if (src?.isImage) return 3600   // freeze frames are still images — no natural duration limit
+    return src?.duration ?? clip.trimEnd
   })
 
   const leftTrimRef  = useRef<{ startX: number; trimStart: number } | null>(null)
@@ -40,7 +41,7 @@ export default function ClipItem({ timing, zoom, stepColorIdx, onBodyMouseDown }
   const [leftDragging,  setLeftDragging]  = useState(false)
   const [rightDragging, setRightDragging] = useState(false)
 
-  const colorClass = clip.background ? '' : COLORS[(stepColorIdx ?? index) % COLORS.length]
+  const colorClass = clip.background ? '' : COLORS[index % COLORS.length]
   const widthPx = duration * zoom
   const leftPx = start * zoom
 

@@ -51,6 +51,11 @@ export interface AudioLayer {
   startAt: number      // timeline position (seconds)
   trimStart: number    // seconds into the source file
   trimEnd: number      // seconds into the source file
+  trackIndex: number         // which row the clip lives on (0 = first audio row)
+  fadeIn?: number            // fade-in duration in seconds (applied at clip start)
+  fadeOut?: number           // fade-out duration in seconds (applied at clip end)
+  s3Key?: string             // set after upload; used to regenerate objectUrl on reload
+  detachedFromSourceId?: string  // set when created via detachAudio; mutes the source video in preview
 }
 
 export interface OverlayLayer {
@@ -83,6 +88,36 @@ export interface OverlayLayer {
   borderWidth?: number  // px
 }
 
+export interface CcWord {
+  word: string
+  startAt: number  // timeline seconds
+  endAt: number
+}
+
+export interface CcSegment {
+  id: string
+  text: string
+  startAt: number  // timeline seconds
+  endAt: number
+  words?: CcWord[]  // word-level timing for highlight mode
+}
+
+export interface ShapeLayer {
+  id: string
+  type: 'rectangle'
+  startAt: number   // timeline seconds
+  duration: number  // seconds visible
+  x: number         // % of frame (center)
+  y: number         // % of frame (center)
+  width: number     // % of frame width
+  height: number    // % of frame height
+  strokeColor: string  // hex
+  strokeWidth: number  // stroke width — 1 unit ≈ 1px at reference 640px preview
+  strokeOpacity: number // 0–1
+  borderRadius: number  // border radius — same scale as strokeWidth
+  opacity: number       // overall opacity 0–1
+}
+
 export interface Step {
   id: string
   clipId: string       // references a Clip
@@ -101,4 +136,6 @@ export interface Project {
   audioLayers: AudioLayer[]
   overlayLayers: OverlayLayer[]
   steps?: Step[]       // present for walkthrough projects
+  ccSegments?: CcSegment[]
+  shapeLayers?: ShapeLayer[]
 }

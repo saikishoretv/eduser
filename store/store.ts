@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Clip, ClipBackground, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, Step } from '@/types'
+import { Clip, ClipBackground, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, Step, CcSegment, ShapeLayer } from '@/types'
 import { getClipTimings, getTotalDuration, canMerge, getSelectedIndices } from '@/lib/clipUtils'
 import { FormatPreset } from '@/lib/formats'
 import { SubtitleAppearance, SUBTITLE_DEFAULT, StandardSubtitleAppearance, STANDARD_SUBTITLE_DEFAULT } from '@/lib/subtitleTemplates'
@@ -7,6 +7,7 @@ import { ColorCorrection, COLOR_CORRECTION_DEFAULT } from '@/lib/colorPresets'
 
 export type ZoomPreset = 'none' | 'punch' | 'ken-burns'
 export type SubtitleStyle = 'off' | 'standard' | 'highlight'
+export type SubtitlePosition = 'bottom' | 'top' | 'left' | 'right'
 export type TransitionType = 'none' | 'fade' | 'slide-left' | 'slide-right' | 'slide-top' | 'slide-bottom' | 'blur'
 
 type UndoSnapshot = {
@@ -43,6 +44,8 @@ interface EditorStore {
   clipColorCorrections: Record<string, ColorCorrection>
   clipSpeeds: Record<string, number>
   subtitleStyle: SubtitleStyle
+  subtitlePosition: SubtitlePosition
+  subtitleFontSize: number
   subtitleAppearance: SubtitleAppearance
   standardSubtitleAppearance: StandardSubtitleAppearance
 
@@ -64,6 +67,8 @@ interface EditorStore {
     clipColorCorrections?: Record<string, ColorCorrection>
     clipSpeeds?: Record<string, number>
     subtitleStyle?: SubtitleStyle
+    subtitlePosition?: SubtitlePosition
+    subtitleFontSize?: number
     subtitleAppearance?: SubtitleAppearance
     standardSubtitleAppearance?: StandardSubtitleAppearance
     outputFormat?: FormatPreset | null
@@ -79,6 +84,9 @@ interface EditorStore {
   setSourceTranscript: (sourceId: string, transcript: TranscriptSegment[], detectedLanguage?: string) => void
   setSourceTranslation: (sourceId: string, language: string, segments: TranscriptSegment[]) => void
   clearSourceTranslation: (sourceId: string) => void
+  setCcSegments: (projectId: string, segments: CcSegment[]) => void
+  updateCcSegment: (projectId: string, segmentId: string, text: string) => void
+  deleteCcSegment: (projectId: string, segmentId: string) => void
 
   selectClip: (id: string, addToSelection: boolean) => void
   clearSelection: () => void
@@ -95,7 +103,8 @@ interface EditorStore {
   setClipSpeed: (clipId: string, speed: number) => void
   addAudioLayer: (layer: AudioLayer) => void
   removeAudioLayer: (layerId: string) => void
-  updateAudioLayer: (layerId: string, patch: Partial<Pick<AudioLayer, 'volume' | 'startAt' | 'trimStart' | 'trimEnd'>>) => void
+  updateAudioLayer: (layerId: string, patch: Partial<Pick<AudioLayer, 'volume' | 'startAt' | 'trimStart' | 'trimEnd' | 'trackIndex' | 'fadeIn' | 'fadeOut'>>) => void
+  resolveAudioConflicts: (movedLayerId: string) => void
   setSelectedAudioLayerId: (id: string | null) => void
   updateClip: (clipId: string, patch: Partial<Pick<Clip, 'trimStart' | 'trimEnd'>>) => void
   addOverlayLayer: (layer: OverlayLayer) => void
@@ -103,7 +112,15 @@ interface EditorStore {
   updateOverlayLayer: (id: string, patch: Partial<OverlayLayer>) => void
   setSelectedOverlayId: (id: string | null) => void
 
+  selectedShapeId: string | null
+  setSelectedShapeId: (id: string | null) => void
+  addShapeLayer: (layer: ShapeLayer) => void
+  removeShapeLayer: (id: string) => void
+  updateShapeLayer: (id: string, patch: Partial<Omit<ShapeLayer, 'id' | 'type'>>) => void
+
   setSubtitleStyle: (style: SubtitleStyle) => void
+  setSubtitlePosition: (position: SubtitlePosition) => void
+  setSubtitleFontSize: (size: number) => void
   setSubtitleAppearance: (appearance: SubtitleAppearance) => void
   setStandardSubtitleAppearance: (appearance: StandardSubtitleAppearance) => void
   setPlayhead: (time: number) => void
@@ -234,6 +251,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       selectedClipIds: [],
       selectedAudioLayerId: null,
       selectedOverlayId: null,
+      selectedShapeId: null,
       audioLayerClipboard: null,
       overlayClipboard: null,
       clipboard: [],
@@ -252,6 +270,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       clipSpeeds: {},
       pendingFreezeFrame: false,
       subtitleStyle: 'off' as SubtitleStyle,
+      subtitlePosition: 'bottom' as SubtitlePosition,
+      subtitleFontSize: 1.0,
       subtitleAppearance: SUBTITLE_DEFAULT,
       standardSubtitleAppearance: STANDARD_SUBTITLE_DEFAULT,
       undoPast: [],
@@ -299,8 +319,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         const project: Project = {
           id: data.id, name: data.name, createdAt: data.createdAt,
           clips: data.clips, sources: data.sources,
-          audioLayers: data.audioLayers, overlayLayers: data.overlayLayers,
-          steps: data.steps,
+          audioLayers: (data.audioLayers ?? []).map(l => ({ ...l, trackIndex: l.trackIndex ?? 0 })), overlayLayers: data.overlayLayers,
+          steps: data.steps, ccSegments: data.ccSegments, shapeLayers: data.shapeLayers ?? [],
         }
         return {
           projects: s.projects.some(p => p.id === project.id)
@@ -314,7 +334,9 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           ...(data.clipTransitionOut !== undefined && { clipTransitionOut: { ...s.clipTransitionOut, ...data.clipTransitionOut } }),
           ...(data.clipColorCorrections !== undefined && { clipColorCorrections: { ...s.clipColorCorrections, ...data.clipColorCorrections } }),
           ...(data.clipSpeeds !== undefined && { clipSpeeds: { ...s.clipSpeeds, ...data.clipSpeeds } }),
-          ...(data.subtitleStyle !== undefined && { subtitleStyle: data.subtitleStyle }),
+          ...(data.subtitleStyle    !== undefined && { subtitleStyle:    data.subtitleStyle }),
+          ...(data.subtitlePosition !== undefined && { subtitlePosition: data.subtitlePosition }),
+          ...(data.subtitleFontSize !== undefined && { subtitleFontSize: data.subtitleFontSize }),
           ...(data.subtitleAppearance !== undefined && { subtitleAppearance: data.subtitleAppearance }),
           ...(data.standardSubtitleAppearance !== undefined && { standardSubtitleAppearance: data.standardSubtitleAppearance }),
           ...(data.outputFormat !== undefined && { outputFormat: data.outputFormat }),
@@ -360,15 +382,8 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           (a.timelinePosition ?? 0) - (b.timelinePosition ?? 0)
         )
 
-        if (time === undefined) {
-          return { projects: s.projects.map(p => p.id === projectId ? { ...p, steps: newSteps } : p) }
-        }
-
-        const { clips, audioLayers, overlayLayers } = splitAllAtTime(project, s.clipSpeeds, time)
         return {
-          projects: s.projects.map(p =>
-            p.id === projectId ? { ...p, clips, audioLayers, overlayLayers, steps: newSteps } : p
-          ),
+          projects: s.projects.map(p => p.id === projectId ? { ...p, steps: newSteps } : p),
           ...withUndo(s),
         }
       }),
@@ -386,14 +401,13 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         const project = s.projects.find(p => p.id === projectId)
         if (!project) return s
 
-        const { clips, audioLayers, overlayLayers } = splitAllAtTime(project, s.clipSpeeds, newPosition)
         const steps = (project.steps ?? [])
           .map(st => st.id === stepId ? { ...st, timelinePosition: newPosition } : st)
           .sort((a, b) => (a.timelinePosition ?? 0) - (b.timelinePosition ?? 0))
 
         return {
           projects: s.projects.map(p =>
-            p.id === projectId ? { ...p, clips, audioLayers, overlayLayers, steps } : p
+            p.id === projectId ? { ...p, steps } : p
           ),
           ...withUndo(s),
         }
@@ -471,7 +485,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       }),
 
       setActiveProject: (id) => {
-        set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, playheadTime: 0, isPlaying: false })
+        set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, selectedShapeId: null, playheadTime: 0, isPlaying: false })
       },
 
       setSourceObjectUrl: (sourceId, objectUrl) => set(s => ({
@@ -516,6 +530,24 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         })),
       })),
 
+      setCcSegments: (projectId, segments) => set(s => ({
+        projects: s.projects.map(p => p.id === projectId ? { ...p, ccSegments: segments } : p),
+      })),
+
+      updateCcSegment: (projectId, segmentId, text) => set(s => ({
+        projects: s.projects.map(p => p.id !== projectId ? p : {
+          ...p,
+          ccSegments: (p.ccSegments ?? []).map(seg => seg.id === segmentId ? { ...seg, text } : seg),
+        }),
+      })),
+
+      deleteCcSegment: (projectId, segmentId) => set(s => ({
+        projects: s.projects.map(p => p.id !== projectId ? p : {
+          ...p,
+          ccSegments: (p.ccSegments ?? []).filter(seg => seg.id !== segmentId),
+        }),
+      })),
+
       addAudioLayer: (layer) => set(s => ({
         projects: s.projects.map(p =>
           p.id === s.activeProjectId
@@ -544,6 +576,68 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
             : p
         ),
       })),
+
+      resolveAudioConflicts: (movedLayerId) => {
+        set(s => {
+          const project = activeProject(s)
+          if (!project) return s
+          const layers = project.audioLayers ?? []
+          const moved = layers.find(l => l.id === movedLayerId)
+          if (!moved) return s
+
+          const movedStart = moved.startAt
+          const movedEnd   = moved.startAt + (moved.trimEnd - moved.trimStart)
+          const movedTrack = moved.trackIndex ?? 0
+          const updates: Record<string, number> = {}
+
+          // Push right: layers that overlap and start >= movedStart (same track only)
+          const rightConflicts = layers
+            .filter(l => l.id !== movedLayerId && (l.trackIndex ?? 0) === movedTrack)
+            .filter(l => {
+              const lEnd = l.startAt + (l.trimEnd - l.trimStart)
+              return l.startAt >= movedStart && l.startAt < movedEnd && lEnd > movedStart
+            })
+            .sort((a, b) => a.startAt - b.startAt)
+
+          let frontier = movedEnd
+          for (const l of rightConflicts) {
+            const lDur = l.trimEnd - l.trimStart
+            if (l.startAt < frontier) {
+              updates[l.id] = frontier
+              frontier += lDur
+            } else {
+              frontier = l.startAt + lDur
+            }
+          }
+
+          // Push left: layers that overlap and start < movedStart (same track only)
+          const leftConflicts = layers
+            .filter(l => l.id !== movedLayerId && (l.trackIndex ?? 0) === movedTrack)
+            .filter(l => {
+              const lEnd = l.startAt + (l.trimEnd - l.trimStart)
+              return l.startAt < movedStart && lEnd > movedStart
+            })
+            .sort((a, b) => b.startAt - a.startAt)
+
+          let leftFrontier = movedStart
+          for (const l of leftConflicts) {
+            const lDur = l.trimEnd - l.trimStart
+            const newStartAt = Math.max(0, leftFrontier - lDur)
+            updates[l.id] = newStartAt
+            leftFrontier = newStartAt
+          }
+
+          if (Object.keys(updates).length === 0) return s
+          return {
+            projects: s.projects.map(p =>
+              p.id === project.id
+                ? { ...p, audioLayers: layers.map(l => updates[l.id] !== undefined ? { ...l, startAt: updates[l.id] } : l) }
+                : p
+            ),
+            ...withUndo(s),
+          }
+        })
+      },
 
       updateClip: (clipId, patch) => set(s => {
         const project = activeProject(s)
@@ -584,6 +678,34 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         ),
       })),
       setSelectedOverlayId: (id) => set({ selectedOverlayId: id }),
+
+      setSelectedShapeId: (id) => set({ selectedShapeId: id }),
+      addShapeLayer: (layer) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === s.activeProjectId
+            ? { ...p, shapeLayers: [...(p.shapeLayers ?? []), layer] }
+            : p
+        ),
+        selectedShapeId: layer.id,
+        ...withUndo(s),
+      })),
+      removeShapeLayer: (id) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === s.activeProjectId
+            ? { ...p, shapeLayers: (p.shapeLayers ?? []).filter(sl => sl.id !== id) }
+            : p
+        ),
+        selectedShapeId: s.selectedShapeId === id ? null : s.selectedShapeId,
+        ...withUndo(s),
+      })),
+      updateShapeLayer: (id, patch) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === s.activeProjectId
+            ? { ...p, shapeLayers: (p.shapeLayers ?? []).map(sl => sl.id === id ? { ...sl, ...patch } : sl) }
+            : p
+        ),
+      })),
+
 
       selectClip: (id, addToSelection) => {
         set(s => ({
@@ -630,12 +752,14 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         clipSpeeds: { ...s.clipSpeeds, [clipId]: speed },
         ...withUndo(s),
       })),
-      setSubtitleStyle: (style) => set({ subtitleStyle: style }),
+      setSubtitleStyle:    (style)    => set({ subtitleStyle: style }),
+      setSubtitlePosition: (position) => set({ subtitlePosition: position }),
+      setSubtitleFontSize: (size)     => set({ subtitleFontSize: size }),
       setSubtitleAppearance: (appearance) => set({ subtitleAppearance: appearance }),
       setStandardSubtitleAppearance: (appearance) => set({ standardSubtitleAppearance: appearance }),
       setPlayhead: (time) => set({ playheadTime: Math.max(0, time) }),
       setPreviewTime: (time) => set({ previewTime: time }),
-      setPlaying: (playing) => set({ isPlaying: playing }),
+      setPlaying: (playing) => set(s => ({ isPlaying: playing, previewTime: playing ? null : s.previewTime })),
       setZoom: (zoom) => set({ zoom: Math.max(20, Math.min(500, zoom)) }),
 
       splitAudioLayer: () => {
@@ -806,9 +930,12 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
             objectUrl: source.objectUrl,
             duration: source.duration,
             volume: 1,
+            trackIndex: 0,
             startAt: timing.start,
             trimStart: timing.clip.trimStart,
             trimEnd: timing.clip.trimEnd,
+            detachedFromSourceId: source.id,
+            ...(source.s3Key && { s3Key: source.s3Key }),
           }
           return {
             projects: s.projects.map(p =>

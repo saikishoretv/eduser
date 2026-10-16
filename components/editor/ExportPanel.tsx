@@ -4,16 +4,19 @@ import { useState, useCallback, useEffect } from 'react'
 import { useEditorStore } from '@/store/store'
 import { exportVideo } from '@/lib/export'
 
+const EMPTY_ARR: never[] = []
+
 interface Props {
   onClose: () => void
 }
 
 export default function ExportPanel({ onClose }: Props) {
-  const clips                   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? [])
-  const sources                 = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.sources ?? [])
-  const audioLayers             = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? [])
-  const overlayLayers           = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.overlayLayers ?? [])
+  const clips                   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_ARR)
+  const sources                 = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.sources ?? EMPTY_ARR)
+  const audioLayers             = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_ARR)
+  const overlayLayers           = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.overlayLayers ?? EMPTY_ARR)
   const outputFormat            = useEditorStore(s => s.outputFormat)
+
   const clipCrops               = useEditorStore(s => s.clipCrops)
   const clipZooms               = useEditorStore(s => s.clipZooms)
   const clipSpeeds              = useEditorStore(s => s.clipSpeeds)
@@ -22,11 +25,14 @@ export default function ExportPanel({ onClose }: Props) {
   const clipTransitionOut       = useEditorStore(s => s.clipTransitionOut)
   const clipTransitionDurations = useEditorStore(s => s.clipTransitionDurations)
   const subtitleStyle           = useEditorStore(s => s.subtitleStyle)
+  const subtitlePosition        = useEditorStore(s => s.subtitlePosition)
+  const subtitleFontSize        = useEditorStore(s => s.subtitleFontSize)
   const subtitleAppearance      = useEditorStore(s => s.subtitleAppearance)
   const standardSubtitleAppearance = useEditorStore(s => s.standardSubtitleAppearance)
 
-  const hasTranscript  = sources.some(s => s.transcript?.length)
-  const canBurnSubs    = hasTranscript && subtitleStyle !== 'off'
+  const ccSegments     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.ccSegments ?? EMPTY_ARR)
+  const shapeLayers    = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_ARR)
+  const canBurnSubs    = ccSegments.length > 0 && subtitleStyle !== 'off'
 
   const [resolution, setResolution] = useState<720 | 1080>(1080)
   const [burnSubtitles, setBurnSubtitles] = useState(canBurnSubs)
@@ -59,9 +65,13 @@ export default function ExportPanel({ onClose }: Props) {
         clipTransitionOut,
         clipTransitionDurations,
         resolution,
+        ccSegments,
         subtitleStyle: burnSubtitles ? subtitleStyle : 'off',
+        subtitlePosition,
+        subtitleFontSize,
         subtitleAppearance,
         standardSubtitleAppearance,
+        shapeLayers,
         onProgress: (ratio) => {
           setPhase('exporting')
           setProgress(ratio)
@@ -74,7 +84,7 @@ export default function ExportPanel({ onClose }: Props) {
       setError(err instanceof Error ? err.message : 'Export failed')
       setPhase('error')
     }
-  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitleAppearance, standardSubtitleAppearance])
+  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitlePosition, subtitleFontSize, subtitleAppearance, standardSubtitleAppearance, ccSegments, shapeLayers])
 
   const handleDownload = () => {
     if (!downloadUrl) return
@@ -137,8 +147,8 @@ export default function ExportPanel({ onClose }: Props) {
                   {subtitleStyle === 'standard' ? 'Standard' : 'Word Highlight'}
                 </span>
               </div>
-              {!hasTranscript ? (
-                <span className="text-[10px] text-amber-500">Transcribe first</span>
+              {ccSegments.length === 0 ? (
+                <span className="text-[10px] text-amber-500">Add CC first</span>
               ) : (
                 <button
                   onClick={() => setBurnSubtitles(v => !v)}

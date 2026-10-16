@@ -25,6 +25,8 @@ function buildMetadata(s: StoreState, projectId: string): Record<string, unknown
       ol.type === 'image' ? { ...ol, objectUrl: '' } : ol
     ),
     steps: project.steps,
+    ccSegments: project.ccSegments ?? [],
+    shapeLayers: project.shapeLayers ?? [],
     clipCrops:               pick(s.clipCrops),
     clipZooms:               pick(s.clipZooms),
     clipZoomPresets:         pick(s.clipZoomPresets),
@@ -33,6 +35,8 @@ function buildMetadata(s: StoreState, projectId: string): Record<string, unknown
     clipTransitionOut:       pick(s.clipTransitionOut),
     clipColorCorrections:    pick(s.clipColorCorrections),
     subtitleStyle:              s.subtitleStyle,
+    subtitlePosition:           s.subtitlePosition,
+    subtitleFontSize:           s.subtitleFontSize,
     subtitleAppearance:         s.subtitleAppearance,
     standardSubtitleAppearance: s.standardSubtitleAppearance,
     outputFormat:               s.outputFormat,

@@ -26,6 +26,12 @@ export async function GET(
     objectUrl: src.s3Key ? await getDownloadUrl(src.s3Key) : '',
   })))
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const audioLayers = await Promise.all((meta.audioLayers ?? []).map(async (al: any) => ({
+    ...al,
+    objectUrl: al.s3Key ? await getDownloadUrl(al.s3Key) : '',
+  })))
+
   return Response.json({
     project: {
       id: String(doc._id),
@@ -33,9 +39,11 @@ export async function GET(
       createdAt: new Date(doc.createdAt as string).getTime(),
       clips:         meta.clips         ?? [],
       sources,
-      audioLayers:   meta.audioLayers   ?? [],
+      audioLayers,
       overlayLayers: meta.overlayLayers ?? [],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ccSegments:    meta.ccSegments    ?? [],
+      shapeLayers:   meta.shapeLayers   ?? [],
       steps: meta.steps ?? (meta.clips ?? []).map((c: any, i: number) => ({
         id: `${c.id}-step`,
         clipId: c.id,
@@ -53,6 +61,8 @@ export async function GET(
       clipColorCorrections:    meta.clipColorCorrections     ?? {},
       clipSpeeds:              meta.clipSpeeds               ?? {},
       subtitleStyle:           meta.subtitleStyle            ?? 'off',
+      subtitlePosition:        meta.subtitlePosition         ?? 'bottom',
+      subtitleFontSize:        meta.subtitleFontSize         ?? 1.0,
       subtitleAppearance:      meta.subtitleAppearance       ?? null,
       standardSubtitleAppearance: meta.standardSubtitleAppearance ?? null,
       outputFormat:            meta.outputFormat             ?? null,

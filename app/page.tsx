@@ -99,12 +99,24 @@ function getVideoMetadata(url: string): Promise<{ duration: number; width: numbe
   return new Promise((resolve, reject) => {
     const v = document.createElement('video')
     v.preload = 'metadata'
-    v.onloadedmetadata = () => resolve({
-      duration: v.duration,
-      width: v.videoWidth,
-      height: v.videoHeight,
-      hasAudio: (v.audioTracks?.length ?? 0) > 0,
-    })
+    v.muted = true
+    v.onloadedmetadata = () => {
+      let hasAudio: boolean
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const audioTracks = (v as any).audioTracks
+      if (audioTracks !== undefined) {
+        hasAudio = audioTracks.length > 0
+      } else {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const stream = (v as any).captureStream?.()
+          hasAudio = stream ? stream.getAudioTracks().length > 0 : true
+        } catch {
+          hasAudio = true
+        }
+      }
+      resolve({ duration: v.duration, width: v.videoWidth, height: v.videoHeight, hasAudio })
+    }
     v.onerror = reject
     v.src = url
   })
