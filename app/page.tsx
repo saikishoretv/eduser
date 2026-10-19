@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import { SourceVideo } from '@/types'
 import { signOut, useSession } from '@/lib/auth-client'
+import { compressVideo } from '@/lib/compress'
 
 const TIPS = [
   'Trim clips by dragging their edges in the timeline.',
@@ -46,7 +47,7 @@ function UploadModal({ stage, progress }: { stage: string; progress: number }) {
         {/* Progress bar */}
         <div className="w-full">
           <div className="flex justify-between text-xs text-neutral-500 mb-1.5">
-            <span>Uploading</span>
+            <span>{stage}</span>
             <span>{progress}%</span>
           </div>
           <div className="w-full h-1.5 bg-neutral-800 rounded-full overflow-hidden">
@@ -169,20 +170,25 @@ export default function ListingPage() {
       const { duration, width, height, hasAudio } = await getVideoMetadata(objectUrl)
       const sourceId = crypto.randomUUID()
 
+      setLoadingLabel('Compressing…')
+      setUploadProgress(0)
+      const fileToUpload = await compressVideo(file, pct => setUploadProgress(Math.round(pct * 100)))
+      setUploadProgress(0)
+
       setLoadingLabel('Uploading…')
       const urlRes = await fetch('/api/sources/upload-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sourceId, fileName: file.name, contentType: file.type }),
+        body: JSON.stringify({ sourceId, fileName: fileToUpload.name, contentType: fileToUpload.type }),
       })
       if (!urlRes.ok) throw new Error('Failed to get upload URL')
       const { uploadUrl, s3Key } = await urlRes.json()
 
-      await uploadWithProgress(uploadUrl, file, file.type, setUploadProgress)
+      await uploadWithProgress(uploadUrl, fileToUpload, fileToUpload.type, setUploadProgress)
 
       const source: SourceVideo = {
         id: sourceId,
-        name: file.name.replace(/\.[^.]+$/, ''),
+        name: file.name.replace(/\.[^.]+$/, ''), // always use original name (without extension)
         duration,
         width,
         height,
