@@ -129,6 +129,7 @@ export default function ListingPage() {
   const [loading, setLoading] = useState(false)
   const [loadingLabel, setLoadingLabel] = useState('Loading…')
   const [uploadProgress, setUploadProgress] = useState(0)
+  const [limitError, setLimitError] = useState<string | null>(null)
   const { data: session } = useSession()
   const user = session?.user ?? null
   const [dbProjects, setDbProjects] = useState<Array<{ id: string; name: string; createdAt: number; duration: number }>>([])
@@ -162,6 +163,7 @@ export default function ListingPage() {
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    setLimitError(null)
     setLoading(true)
     setLoadingLabel('Preparing…')
     setUploadProgress(0)
@@ -207,7 +209,7 @@ export default function ListingPage() {
         overlayLayers: [],
         steps: newProject.steps,
       }
-      fetch('/api/projects', {
+      const saveRes = await fetch('/api/projects', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -216,7 +218,14 @@ export default function ListingPage() {
           metadata,
           sources: [{ id: source.id, name: source.name, duration: source.duration, s3Key: source.s3Key! }],
         }),
-      }).catch(console.error)
+      })
+
+      if (saveRes.status === 403) {
+        const body = await saveRes.json()
+        setLimitError(`You've reached your limit of ${body.limit} project${body.limit === 1 ? '' : 's'}. Delete an existing project to upload a new one.`)
+        setLoading(false)
+        return
+      }
 
       setDbProjects(prev => [{
         id: projectId,
@@ -236,6 +245,12 @@ export default function ListingPage() {
   return (
     <div className="min-h-screen bg-neutral-950">
       {loading && <UploadModal stage={loadingLabel} progress={uploadProgress} />}
+      {limitError && (
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-50 bg-red-950 border border-red-800 text-red-200 text-sm px-5 py-3 rounded-xl shadow-lg flex items-center gap-3 max-w-md">
+          <span>{limitError}</span>
+          <button onClick={() => setLimitError(null)} className="text-red-400 hover:text-red-200 ml-auto shrink-0">✕</button>
+        </div>
+      )}
       <header className="border-b border-neutral-800 px-6 py-4 flex items-center justify-between">
         <span className="text-white font-semibold tracking-tight">Eduser</span>
         <div className="flex items-center gap-3">

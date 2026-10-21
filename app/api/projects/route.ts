@@ -47,6 +47,15 @@ export async function POST(request: Request) {
   }
 
   const db = await getDb()
+
+  // Enforce per-user video limit (default 5)
+  const limitDoc = await db.collection('user_limits').findOne({ userId })
+  const videoLimit: number = (limitDoc?.videoLimit as number | undefined) ?? 5
+  const existing = await db.collection('projects').countDocuments({ userId })
+  if (existing >= videoLimit) {
+    return Response.json({ error: 'Video limit reached', limit: videoLimit }, { status: 403 })
+  }
+
   const now = new Date()
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
