@@ -17,6 +17,7 @@ import { canMerge } from '@/lib/clipUtils'
 import { COLOR_PRESETS, COLOR_CORRECTION_DEFAULT, ColorCorrection } from '@/lib/colorPresets'
 import { TEXT_FORMAT_PRESETS } from '@/lib/subtitleTemplates'
 import RichTextEditor from './RichTextEditor'
+import RemovePausesModal from './RemovePausesModal'
 
 const SLIDERS: Array<{
   key: keyof ColorCorrection
@@ -34,6 +35,7 @@ const SLIDERS: Array<{
 
 export default function Toolbar() {
   const [showColor, setShowColor] = useState(false)
+  const [showRemovePauses, setShowRemovePauses] = useState(false)
   const [textDrop, setTextDrop]   = useState<'format' | 'colors' | null>(null)
   const [dropPos, setDropPos]     = useState({ top: 0, left: 0 })
   const [transitionDrop, setTransitionDrop]       = useState(false)
@@ -608,6 +610,13 @@ export default function Toolbar() {
         Color
       </button>
 
+      <button
+        onClick={() => setShowRemovePauses(true)}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors text-neutral-300 hover:bg-neutral-700 hover:text-white"
+      >
+        Remove Pauses
+      </button>
+
       <div className="w-px h-4 bg-neutral-700 mx-1" />
 
       <button
@@ -904,6 +913,8 @@ export default function Toolbar() {
           </button>
         </>
       )}
+
+      {showRemovePauses && <RemovePausesModal onClose={() => setShowRemovePauses(false)} />}
     </div>
   )
 }

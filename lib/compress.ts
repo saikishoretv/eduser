@@ -87,5 +87,5 @@ export async function compressVideo(
   ffmpeg.off('progress')
 
   const baseName = file.name.replace(/\.[^.]+$/, '')
-  return new File([data.buffer], `${baseName}.mp4`, { type: 'video/mp4' })
+  return new File([data.buffer as ArrayBuffer], `${baseName}.mp4`, { type: 'video/mp4' })
 }

@@ -117,6 +117,7 @@ interface EditorStore {
   addShapeLayer: (layer: ShapeLayer) => void
   removeShapeLayer: (id: string) => void
   updateShapeLayer: (id: string, patch: Partial<Omit<ShapeLayer, 'id' | 'type'>>) => void
+  applyPauseCuts: (clips: Clip[]) => void
 
   setSubtitleStyle: (style: SubtitleStyle) => void
   setSubtitlePosition: (position: SubtitlePosition) => void
@@ -705,6 +706,16 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
             : p
         ),
       })),
+
+      applyPauseCuts: (clips) => set(s => {
+        const project = s.projects.find(p => p.id === s.activeProjectId)
+        if (!project) return s
+        return {
+          ...withUndo(s),
+          projects: replaceClips(s.projects, project.id, clips),
+          selectedClipIds: [],
+        }
+      }),
 
 
       selectClip: (id, addToSelection) => {
