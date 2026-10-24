@@ -101,7 +101,7 @@ export default function ShapeItem({ shape, zoom, rowTop, rowH, selected, onSelec
         }}
       >
         <span className="text-[9px] font-medium text-white/90 truncate leading-none select-none">
-          Rectangle
+          {shape.type === 'ripple' ? 'Ripple' : 'Rectangle'}
         </span>
       </div>
 

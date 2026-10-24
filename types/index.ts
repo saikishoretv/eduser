@@ -104,7 +104,7 @@ export interface CcSegment {
 
 export interface ShapeLayer {
   id: string
-  type: 'rectangle'
+  type: 'rectangle' | 'ripple'
   startAt: number   // timeline seconds
   duration: number  // seconds visible
   x: number         // % of frame (center)

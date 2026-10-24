@@ -677,65 +677,106 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     // holds the last fully-drawn frame for the rest of the shape's visible duration.
     // The overlay filter skips consuming input 1 when enable=0, so no frames are wasted.
     const SHAPE_ANIM_FPS = 30
-    const shapeInputInfos: { animIdx: number; frameCount: number }[] = []
+    const shapeInputInfos: { animIdx: number; frameCount: number; looping?: boolean }[] = []
     for (const sl of shapeLayers) {
       const canvas = document.createElement('canvas')
       canvas.width  = outW
       canvas.height = outH
       const ctx = canvas.getContext('2d')!
-      const cx  = outW * sl.x / 100
-      const cy  = outH * sl.y / 100
-      const hw  = outW * sl.width  / 100 / 2
-      const hh  = outH * sl.height / 100 / 2
-      const W   = hw * 2
-      const H   = hh * 2
-      const x0  = cx - hw
-      const y0  = cy - hh
-      const scale  = outW / 640
-      const r = Math.max(0, Math.min(sl.borderRadius * scale, hw, hh))
-      const perim  = r > 0 ? 2 * (W - 2 * r) + 2 * (H - 2 * r) + 2 * Math.PI * r : 2 * (W + H)
+      const pxScale = outW / 640
 
-      const animDur  = Math.min(0.8, sl.duration)
-      const frameCount = Math.max(2, Math.ceil(animDur * SHAPE_ANIM_FPS))
+      if (sl.type === 'ripple') {
+        // Two rings that expand and fade, looping every 1.5s.
+        // We generate exactly one cycle (45 frames) and loop them in filter_complex.
+        const RIPPLE_CYCLE  = 1.5
+        const RIPPLE_OFFSET = 0.75  // ring 2 is half a cycle ahead (matches CSS animation-delay: -0.75s)
+        const frameCount    = Math.ceil(RIPPLE_CYCLE * SHAPE_ANIM_FPS)  // 45
+        const cx = outW * sl.x / 100
+        const cy = outH * sl.y / 100
+        const maxR = outW * sl.width / 100 / 2
 
-      for (let n = 0; n < frameCount; n++) {
-        const rawProg = frameCount === 1 ? 1 : n / (frameCount - 1)  // 0 → 1
-        const progress = 1 - (1 - rawProg) ** 2                       // ease-out quadratic
-        ctx.clearRect(0, 0, outW, outH)
-        ctx.globalAlpha = sl.opacity
-        if (sl.strokeWidth > 0 && sl.strokeOpacity > 0) {
-          ctx.strokeStyle = sl.strokeColor + Math.round(sl.strokeOpacity * 255).toString(16).padStart(2, '0')
-          ctx.lineWidth   = sl.strokeWidth * scale
-          ctx.setLineDash([perim, perim])
-          ctx.lineDashOffset = perim * (1 - progress)  // perim=invisible → 0=fully drawn
-          ctx.beginPath()
-          if (r <= 0) {
-            ctx.moveTo(x0 + W, y0)
-            ctx.lineTo(x0 + W, y0 + H)
-            ctx.lineTo(x0,     y0 + H)
-            ctx.lineTo(x0,     y0)
-            ctx.closePath()
-          } else {
-            ctx.moveTo(x0 + W - r, y0)
-            ctx.arcTo(x0 + W, y0,     x0 + W, y0 + r,     r)
-            ctx.lineTo(x0 + W, y0 + H - r)
-            ctx.arcTo(x0 + W, y0 + H, x0 + W - r, y0 + H, r)
-            ctx.lineTo(x0 + r, y0 + H)
-            ctx.arcTo(x0,     y0 + H, x0,     y0 + H - r, r)
-            ctx.lineTo(x0,     y0 + r)
-            ctx.arcTo(x0,     y0,     x0 + r, y0,         r)
-            ctx.closePath()
+        for (let n = 0; n < frameCount; n++) {
+          const t = n / SHAPE_ANIM_FPS
+          ctx.clearRect(0, 0, outW, outH)
+          ctx.setLineDash([])
+
+          for (let ring = 0; ring < 2; ring++) {
+            const tOff     = ring === 0 ? 0 : RIPPLE_OFFSET
+            const rawPhase = ((t + tOff) % RIPPLE_CYCLE) / RIPPLE_CYCLE
+            const eased    = 1 - (1 - rawPhase) ** 2  // ease-out quadratic
+            const ringR    = maxR * eased
+            const ringAlpha = (1 - eased) * sl.strokeOpacity * sl.opacity
+            if (ringAlpha < 0.005 || ringR < 0.5) continue
+            ctx.globalAlpha = ringAlpha
+            ctx.strokeStyle = sl.strokeColor
+            ctx.lineWidth   = sl.strokeWidth * pxScale
+            ctx.beginPath()
+            ctx.arc(cx, cy, ringR, 0, 2 * Math.PI)
+            ctx.stroke()
           }
-          ctx.stroke()
-        }
-        const blob  = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'))
-        const bytes = new Uint8Array(await blob.arrayBuffer())
-        await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, bytes)
-      }
 
-      console.log(`[export] shape ${sl.id}: wrote ${frameCount} anim frames, itsoffset=${sl.startAt.toFixed(3)}, inputIdx=${inputIdx}`)
-      inputArgs.push('-itsoffset', sl.startAt.toFixed(6), '-framerate', String(SHAPE_ANIM_FPS), '-i', `shape_${sl.id}_f%03d.png`)
-      shapeInputInfos.push({ animIdx: inputIdx++, frameCount })
+          const blob  = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'))
+          const bytes = new Uint8Array(await blob.arrayBuffer())
+          await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, bytes)
+        }
+
+        inputArgs.push('-itsoffset', sl.startAt.toFixed(6), '-framerate', String(SHAPE_ANIM_FPS), '-i', `shape_${sl.id}_f%03d.png`)
+        shapeInputInfos.push({ animIdx: inputIdx++, frameCount, looping: true })
+      } else {
+        // Rectangle: draw-on stroke animation, hold last frame
+        const cx  = outW * sl.x / 100
+        const cy  = outH * sl.y / 100
+        const hw  = outW * sl.width  / 100 / 2
+        const hh  = outH * sl.height / 100 / 2
+        const W   = hw * 2
+        const H   = hh * 2
+        const x0  = cx - hw
+        const y0  = cy - hh
+        const r = Math.max(0, Math.min(sl.borderRadius * pxScale, hw, hh))
+        const perim  = r > 0 ? 2 * (W - 2 * r) + 2 * (H - 2 * r) + 2 * Math.PI * r : 2 * (W + H)
+
+        const animDur  = Math.min(0.8, sl.duration)
+        const frameCount = Math.max(2, Math.ceil(animDur * SHAPE_ANIM_FPS))
+
+        for (let n = 0; n < frameCount; n++) {
+          const rawProg = frameCount === 1 ? 1 : n / (frameCount - 1)  // 0 → 1
+          const progress = 1 - (1 - rawProg) ** 2                       // ease-out quadratic
+          ctx.clearRect(0, 0, outW, outH)
+          ctx.globalAlpha = sl.opacity
+          if (sl.strokeWidth > 0 && sl.strokeOpacity > 0) {
+            ctx.strokeStyle = sl.strokeColor + Math.round(sl.strokeOpacity * 255).toString(16).padStart(2, '0')
+            ctx.lineWidth   = sl.strokeWidth * pxScale
+            ctx.setLineDash([perim, perim])
+            ctx.lineDashOffset = perim * (1 - progress)  // perim=invisible → 0=fully drawn
+            ctx.beginPath()
+            if (r <= 0) {
+              ctx.moveTo(x0 + W, y0)
+              ctx.lineTo(x0 + W, y0 + H)
+              ctx.lineTo(x0,     y0 + H)
+              ctx.lineTo(x0,     y0)
+              ctx.closePath()
+            } else {
+              ctx.moveTo(x0 + W - r, y0)
+              ctx.arcTo(x0 + W, y0,     x0 + W, y0 + r,     r)
+              ctx.lineTo(x0 + W, y0 + H - r)
+              ctx.arcTo(x0 + W, y0 + H, x0 + W - r, y0 + H, r)
+              ctx.lineTo(x0 + r, y0 + H)
+              ctx.arcTo(x0,     y0 + H, x0,     y0 + H - r, r)
+              ctx.lineTo(x0,     y0 + r)
+              ctx.arcTo(x0,     y0,     x0 + r, y0,         r)
+              ctx.closePath()
+            }
+            ctx.stroke()
+          }
+          const blob  = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'))
+          const bytes = new Uint8Array(await blob.arrayBuffer())
+          await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, bytes)
+        }
+
+        console.log(`[export] shape ${sl.id}: wrote ${frameCount} anim frames, itsoffset=${sl.startAt.toFixed(3)}, inputIdx=${inputIdx}`)
+        inputArgs.push('-itsoffset', sl.startAt.toFixed(6), '-framerate', String(SHAPE_ANIM_FPS), '-i', `shape_${sl.id}_f%03d.png`)
+        shapeInputInfos.push({ animIdx: inputIdx++, frameCount })
+      }
     }
 
     // Image overlay inputs
@@ -1037,13 +1078,21 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       currentV = '[sub_composed]'
     }
 
-    // Shape overlays — draw-on animation sequence; eof_action=repeat holds the last frame
+    // Shape overlays
     shapeLayers.forEach((sl, i) => {
-      const { animIdx } = shapeInputInfos[i]
+      const { animIdx, frameCount, looping } = shapeInputInfos[i]
       const t0       = sl.startAt.toFixed(3)
       const t1       = (sl.startAt + sl.duration).toFixed(3)
       const outLabel = `[sh${i}]`
-      filterParts.push(`${currentV}[${animIdx}:v]overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
+      if (looping) {
+        // Ripple: loop the one-cycle sequence for the full shape duration
+        const loopLabel = `[sh${i}_loop]`
+        filterParts.push(`[${animIdx}:v]loop=loop=-1:size=${frameCount}:start=0${loopLabel}`)
+        filterParts.push(`${currentV}${loopLabel}overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
+      } else {
+        // Rectangle: eof_action=repeat holds the fully-drawn last frame
+        filterParts.push(`${currentV}[${animIdx}:v]overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
+      }
       currentV = outLabel
     })
 

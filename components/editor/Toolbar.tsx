@@ -857,7 +857,7 @@ export default function Toolbar() {
         </>
       )}
 
-      {/* Shapes ── Add Rectangle button + selected shape controls */}
+      {/* Shapes ── Add buttons + selected shape controls */}
       <div className="w-px h-4 bg-neutral-700 mx-1" />
       <button
         onClick={() => addShapeLayer({
@@ -880,6 +880,28 @@ export default function Toolbar() {
         </svg>
         Rectangle
       </button>
+      <button
+        onClick={() => addShapeLayer({
+          id: crypto.randomUUID(),
+          type: 'ripple',
+          startAt: playheadTime,
+          duration: 3,
+          x: 50, y: 50,
+          width: 25, height: 25,
+          strokeColor: '#3b82f6',
+          strokeWidth: 2,
+          strokeOpacity: 1,
+          borderRadius: 0,
+          opacity: 1,
+        })}
+        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
+      >
+        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="4" />
+          <circle cx="12" cy="12" r="8" opacity="0.5" />
+        </svg>
+        Ripple
+      </button>
 
       {selectedShape && (
         <>
@@ -892,12 +914,16 @@ export default function Toolbar() {
           <input type="range" min={0} max={8} step={0.5} value={selectedShape.strokeWidth}
             onChange={e => updateShapeLayer(selectedShape.id, { strokeWidth: parseFloat(e.target.value) })}
             className="w-14 accent-blue-400" />
-          <div className="w-px h-4 bg-neutral-700 mx-1" />
-          {/* Radius */}
-          <span className="text-[11px] text-neutral-500 shrink-0">Radius</span>
-          <input type="range" min={0} max={50} step={1} value={selectedShape.borderRadius}
-            onChange={e => updateShapeLayer(selectedShape.id, { borderRadius: parseFloat(e.target.value) })}
-            className="w-14 accent-blue-400" />
+          {selectedShape.type !== 'ripple' && (
+            <>
+              <div className="w-px h-4 bg-neutral-700 mx-1" />
+              {/* Radius */}
+              <span className="text-[11px] text-neutral-500 shrink-0">Radius</span>
+              <input type="range" min={0} max={50} step={1} value={selectedShape.borderRadius}
+                onChange={e => updateShapeLayer(selectedShape.id, { borderRadius: parseFloat(e.target.value) })}
+                className="w-14 accent-blue-400" />
+            </>
+          )}
           <div className="w-px h-4 bg-neutral-700 mx-1" />
           {/* Opacity */}
           <span className="text-[11px] text-neutral-500 shrink-0">Opacity</span>

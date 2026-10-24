@@ -178,6 +178,35 @@ function ShapeStroke({ shape }: { shape: ShapeLayer }) {
   )
 }
 
+// Two rings expanding and fading — using CSS animation (rippleExpand in globals.css)
+function RippleStroke({ shape }: { shape: ShapeLayer }) {
+  // Use 50% radius in a square SVG viewport. Since we enforce width=height on creation,
+  // the shape div is square and r="50%" expands exactly to the edge.
+  return (
+    <svg
+      width="100%" height="100%"
+      style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}
+    >
+      <circle
+        cx="50%" cy="50%" r="50%"
+        fill="none"
+        stroke={shape.strokeColor}
+        strokeOpacity={shape.strokeOpacity}
+        strokeWidth={shape.strokeWidth}
+        className="ripple-ring ripple-ring-1"
+      />
+      <circle
+        cx="50%" cy="50%" r="50%"
+        fill="none"
+        stroke={shape.strokeColor}
+        strokeOpacity={shape.strokeOpacity}
+        strokeWidth={shape.strokeWidth}
+        className="ripple-ring ripple-ring-2"
+      />
+    </svg>
+  )
+}
+
 export default function Preview() {
   const videoRef = useRef<HTMLVideoElement>(null)
   const imgRef   = useRef<HTMLImageElement>(null)
@@ -877,7 +906,7 @@ export default function Preview() {
                       shapeDragRef.current = { id: shape.id, mode: 'move', startX: e.clientX, startY: e.clientY, ox: shape.x, oy: shape.y }
                     }}
                   >
-                    <ShapeStroke shape={shape} />
+                    {shape.type === 'ripple' ? <RippleStroke shape={shape} /> : <ShapeStroke shape={shape} />}
 
                     {isSel && RESIZE_HANDLES.map(([relX, relY, cursor]) => (
                       <div
