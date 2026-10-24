@@ -701,12 +701,19 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
           ctx.setLineDash([])
 
           for (let ring = 0; ring < 2; ring++) {
-            const tOff     = ring === 0 ? 0 : RIPPLE_OFFSET
-            const rawPhase = ((t + tOff) % RIPPLE_CYCLE) / RIPPLE_CYCLE
-            const eased    = 1 - (1 - rawPhase) ** 2  // ease-out quadratic
-            const ringR    = maxR * eased
+            const tOff      = ring === 0 ? 0 : RIPPLE_OFFSET
+            const rawPhase  = ((t + tOff) % RIPPLE_CYCLE) / RIPPLE_CYCLE
+            const eased     = 1 - (1 - rawPhase) ** 2  // ease-out quadratic
+            const ringR     = maxR * eased
             const ringAlpha = (1 - eased) * sl.strokeOpacity * sl.opacity
             if (ringAlpha < 0.005 || ringR < 0.5) continue
+            // Slight fill — matches SVG fillOpacity 0.12
+            ctx.globalAlpha = ringAlpha * 0.12
+            ctx.fillStyle   = sl.strokeColor
+            ctx.beginPath()
+            ctx.arc(cx, cy, ringR, 0, 2 * Math.PI)
+            ctx.fill()
+            // Ring stroke
             ctx.globalAlpha = ringAlpha
             ctx.strokeStyle = sl.strokeColor
             ctx.lineWidth   = sl.strokeWidth * pxScale
@@ -714,6 +721,13 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
             ctx.arc(cx, cy, ringR, 0, 2 * Math.PI)
             ctx.stroke()
           }
+          // Static center dot
+          const dotR = Math.max(2, maxR * 0.1)
+          ctx.globalAlpha = 0.9 * sl.strokeOpacity * sl.opacity
+          ctx.fillStyle   = sl.strokeColor
+          ctx.beginPath()
+          ctx.arc(cx, cy, dotR, 0, 2 * Math.PI)
+          ctx.fill()
 
           const blob  = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'))
           const bytes = new Uint8Array(await blob.arrayBuffer())

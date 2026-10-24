@@ -180,8 +180,10 @@ function ShapeStroke({ shape }: { shape: ShapeLayer }) {
 
 // Two rings expanding and fading — using CSS animation (rippleExpand in globals.css)
 function RippleStroke({ shape }: { shape: ShapeLayer }) {
-  // Use 50% radius in a square SVG viewport. Since we enforce width=height on creation,
-  // the shape div is square and r="50%" expands exactly to the edge.
+  // r="50%" exactly fills the square shape div (SVG % r uses normalized diagonal = side for squares).
+  // Each ring has a slight fill (12% of its stroke opacity) that fades with the ring — gives the
+  // soft "glow" seen on phone recording indicators.
+  // The static center dot mimics the solid recording dot on mobile.
   return (
     <svg
       width="100%" height="100%"
@@ -189,19 +191,23 @@ function RippleStroke({ shape }: { shape: ShapeLayer }) {
     >
       <circle
         cx="50%" cy="50%" r="50%"
-        fill="none"
-        stroke={shape.strokeColor}
-        strokeOpacity={shape.strokeOpacity}
+        fill={shape.strokeColor} fillOpacity={0.12 * shape.strokeOpacity}
+        stroke={shape.strokeColor} strokeOpacity={shape.strokeOpacity}
         strokeWidth={shape.strokeWidth}
         className="ripple-ring ripple-ring-1"
       />
       <circle
         cx="50%" cy="50%" r="50%"
-        fill="none"
-        stroke={shape.strokeColor}
-        strokeOpacity={shape.strokeOpacity}
+        fill={shape.strokeColor} fillOpacity={0.12 * shape.strokeOpacity}
+        stroke={shape.strokeColor} strokeOpacity={shape.strokeOpacity}
         strokeWidth={shape.strokeWidth}
         className="ripple-ring ripple-ring-2"
+      />
+      {/* Static center dot */}
+      <circle
+        cx="50%" cy="50%" r="5%"
+        fill={shape.strokeColor} fillOpacity={0.9 * shape.strokeOpacity}
+        stroke="none"
       />
     </svg>
   )
