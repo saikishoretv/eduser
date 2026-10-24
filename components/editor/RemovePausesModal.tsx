@@ -99,6 +99,11 @@ export default function RemovePausesModal({ onClose }: Props) {
               <option key={l.id} value={l.id}>{l.name}</option>
             ))}
           </select>
+          {selectedTrack === 'video' && (
+            <p className="text-[11px] text-amber-400/80 leading-relaxed">
+              ⚠ If your video has background music, detected pauses may be inaccurate. For best results, analyze a voiceover track instead.
+            </p>
+          )}
         </div>
 
         {/* Sensitivity */}
