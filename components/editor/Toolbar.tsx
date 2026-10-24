@@ -41,9 +41,12 @@ export default function Toolbar() {
   const [transitionDrop, setTransitionDrop]       = useState(false)
   const [transitionDropPos, setTransitionDropPos] = useState({ top: 0, left: 0 })
   const [transitionTab, setTransitionTab]         = useState<'in' | 'out'>('in')
+  const [highlightsDrop, setHighlightsDrop]       = useState(false)
+  const [highlightsDropPos, setHighlightsDropPos] = useState({ top: 0, left: 0 })
   const formatBtnRef      = useRef<HTMLButtonElement>(null)
   const colorsBtnRef      = useRef<HTMLButtonElement>(null)
   const transitionBtnRef  = useRef<HTMLButtonElement>(null)
+  const highlightsBtnRef  = useRef<HTMLButtonElement>(null)
   const formatPanelRef    = useRef<HTMLDivElement>(null)
   const colorsPanelRef    = useRef<HTMLDivElement>(null)
   const transitionPanelRef = useRef<HTMLDivElement>(null)
@@ -857,54 +860,63 @@ export default function Toolbar() {
         </>
       )}
 
-      {/* Shapes ── Add buttons + selected shape controls */}
+      {/* Highlights dropdown */}
       <div className="w-px h-4 bg-neutral-700 mx-1" />
       <button
-        onClick={() => addShapeLayer({
-          id: crypto.randomUUID(),
-          type: 'rectangle',
-          startAt: playheadTime,
-          duration: 3,
-          x: 50, y: 50,
-          width: 30, height: 20,
-          strokeColor: '#3b82f6',
-          strokeWidth: 2,
-          strokeOpacity: 1,
-          borderRadius: 4,
-          opacity: 1,
-        })}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
+        ref={highlightsBtnRef}
+        onClick={() => {
+          const rect = highlightsBtnRef.current?.getBoundingClientRect()
+          if (rect) setHighlightsDropPos({ top: rect.bottom + 6, left: rect.left })
+          setHighlightsDrop(v => !v)
+        }}
+        className="flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
       >
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-          <rect x="3" y="6" width="18" height="12" rx="2" />
+        Highlights
+        <svg className="w-3 h-3 opacity-50" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
         </svg>
-        Rectangle
       </button>
-      <button
-        onClick={() => addShapeLayer({
-          id: crypto.randomUUID(),
-          type: 'ripple',
-          startAt: playheadTime,
-          duration: 3,
-          x: 50, y: 50,
-          width: 25, height: 25,
-          strokeColor: '#3b82f6',
-          strokeWidth: 2,
-          strokeOpacity: 1,
-          borderRadius: 0,
-          opacity: 1,
-        })}
-        className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
-      >
-        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="4" />
-          <circle cx="12" cy="12" r="8" opacity="0.5" />
-        </svg>
-        Ripple
-      </button>
+
+      {highlightsDrop && (
+        <>
+          <div className="fixed inset-0 z-[998]" onClick={() => setHighlightsDrop(false)} />
+          <div
+            className="fixed z-[999] bg-neutral-800 border border-neutral-700 rounded-xl shadow-xl py-1 min-w-[140px]"
+            style={{ top: highlightsDropPos.top, left: highlightsDropPos.left }}
+          >
+            <button
+              onClick={() => {
+                addShapeLayer({ id: crypto.randomUUID(), type: 'rectangle', startAt: playheadTime, duration: 3, x: 50, y: 50, width: 30, height: 20, strokeColor: '#3b82f6', strokeWidth: 2, strokeOpacity: 1, borderRadius: 4, opacity: 1 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <rect x="3" y="6" width="18" height="12" rx="2" />
+              </svg>
+              Rectangle
+            </button>
+            <button
+              onClick={() => {
+                addShapeLayer({ id: crypto.randomUUID(), type: 'ripple', startAt: playheadTime, duration: 3, x: 50, y: 50, width: 25, height: 25, strokeColor: '#3b82f6', strokeWidth: 2, strokeOpacity: 1, borderRadius: 0, opacity: 1 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="4" />
+                <circle cx="12" cy="12" r="8" opacity="0.5" />
+              </svg>
+              Ripple
+            </button>
+          </div>
+        </>
+      )}
 
       {selectedShape && (
         <>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <span className="text-[11px] text-neutral-400 font-medium shrink-0 capitalize">{selectedShape.type}</span>
           <div className="w-px h-4 bg-neutral-700 mx-1" />
           {/* Stroke */}
           <span className="text-[11px] text-neutral-500 shrink-0">Stroke</span>
