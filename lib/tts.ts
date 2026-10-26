@@ -9,6 +9,11 @@ export const TTS_VOICES = [
 
 export type TtsVoice = (typeof TTS_VOICES)[number]['id']
 
+export interface TtsResult {
+  blob:     Blob
+  duration: number
+}
+
 let worker: Worker | null = null
 let pending = new Map<string, { resolve: (b: Blob) => void; reject: (e: Error) => void }>()
 
@@ -16,7 +21,7 @@ function getWorker(): Worker {
   if (worker) return worker
   worker = new Worker(new URL('./tts-worker.ts', import.meta.url))
   worker.onmessage = (e: MessageEvent) => {
-    const { id, success, buffer, size, error } = e.data
+    const { id, success, buffer, error } = e.data
     const p = pending.get(id)
     if (!p) return
     pending.delete(id)
@@ -35,7 +40,7 @@ function getWorker(): Worker {
   return worker
 }
 
-export function generateSpeech(text: string, voice: TtsVoice): Promise<Blob> {
+function generateLocal(text: string, voice: TtsVoice): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID()
     pending.set(id, { resolve, reject })
@@ -43,8 +48,51 @@ export function generateSpeech(text: string, voice: TtsVoice): Promise<Blob> {
   })
 }
 
-// Pre-warms the worker so the model is loaded before the first generateSpeech call.
-// Resolves when the worker is spawned (model loading continues in background).
+async function decodeAudioDuration(blob: Blob): Promise<number> {
+  const arrayBuffer = await blob.arrayBuffer()
+  const audioCtx    = new AudioContext()
+  try {
+    const buf = await audioCtx.decodeAudioData(arrayBuffer)
+    return buf.duration
+  } finally {
+    await audioCtx.close()
+  }
+}
+
+function isEnglish(language?: string): boolean {
+  if (!language) return true
+  return language.toLowerCase().startsWith('en')
+}
+
+export async function generateSpeech(text: string, voice: TtsVoice, language?: string): Promise<TtsResult> {
+  if (isEnglish(language)) {
+    const blob     = await generateLocal(text, voice)
+    const duration = blob.size / 2 / 24000   // 16-bit mono 24kHz WAV
+    return { blob, duration }
+  }
+
+  // Non-English: call server-side cloud TTS
+  const res = await fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, language }),
+  })
+
+  if (res.status === 402) {
+    const { error } = await res.json()
+    throw new Error(error)
+  }
+  if (!res.ok) {
+    const { error } = await res.json().catch(() => ({ error: 'TTS failed' }))
+    throw new Error(error)
+  }
+
+  const blob     = await res.blob()
+  const duration = await decodeAudioDuration(blob)
+  return { blob, duration }
+}
+
+// Pre-warms the Kokoro worker (English only). No-op for cloud TTS.
 export function warmUpTTS(): void {
   getWorker()
 }

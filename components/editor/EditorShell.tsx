@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import Preview from './Preview'
@@ -14,6 +14,7 @@ import { useSourceCache } from '@/lib/useSourceCache'
 import { useAutoSave } from '@/lib/useAutoSave'
 import { getClipTimings } from '@/lib/clipUtils'
 import { CcSegment, TranscriptSegment } from '@/types'
+import { signOut, useSession } from '@/lib/auth-client'
 
 interface Props {
   projectId: string
@@ -38,6 +39,19 @@ export default function EditorShell({ projectId }: Props) {
   const [hydrating,     setHydrating]     = useState(false)
   const [editingName,   setEditingName]   = useState(false)
   const [nameValue,     setNameValue]     = useState('')
+  const [showUserMenu, setShowUserMenu] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement>(null)
+  const { data: session } = useSession()
+  const user = session?.user ?? null
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node))
+        setShowUserMenu(false)
+    }
+    if (showUserMenu) document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showUserMenu])
 
   const project = projects.find(p => p.id === projectId)
 
@@ -290,6 +304,38 @@ export default function EditorShell({ projectId }: Props) {
           </button>
 
           <span className="text-xs text-neutral-600">{project.clips.length} clip{project.clips.length !== 1 ? 's' : ''}</span>
+
+          {/* User menu */}
+          {user && (
+            <div className="relative" ref={userMenuRef}>
+              <button
+                onClick={() => setShowUserMenu(v => !v)}
+                className="w-7 h-7 rounded-full bg-neutral-700 hover:bg-neutral-600 text-white text-xs font-semibold flex items-center justify-center transition-colors"
+                title={user.email}
+              >
+                {user.email[0].toUpperCase()}
+              </button>
+              {showUserMenu && (
+                <div className="absolute right-0 top-9 w-52 bg-neutral-800 border border-neutral-700 rounded-xl shadow-2xl overflow-hidden z-50">
+                  <div className="px-3 py-2.5 border-b border-neutral-700">
+                    <p className="text-[11px] text-neutral-500 truncate">{user.email}</p>
+                  </div>
+                  <button
+                    onClick={() => { setShowUserMenu(false); router.push('/settings') }}
+                    className="w-full text-left px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
+                  >
+                    Settings
+                  </button>
+                  <button
+                    onClick={async () => { await signOut(); window.location.href = '/login' }}
+                    className="w-full text-left px-3 py-2 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-red-400 transition-colors"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </header>
 

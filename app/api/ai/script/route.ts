@@ -1,11 +1,7 @@
 import { auth } from '@/lib/auth'
 import { headers } from 'next/headers'
 import OpenAI from 'openai'
-
-const groq = new OpenAI({
-  apiKey: process.env.GROQ_API_KEY!,
-  baseURL: 'https://api.groq.com/openai/v1',
-})
+import { getUserKey } from '@/lib/getUserKey'
 
 const SYSTEM = `You are a professional voiceover script writer. Your sole job is to rewrite or improve voiceover scripts.
 Your output is ONLY the revised script text — no preamble, no quotes, no labels, no commentary.
@@ -79,9 +75,22 @@ export async function POST(request: Request) {
 
   const userPrompt = buildPrompt(action, currentText ?? '', stepTitle ?? '', projectName ?? '', allStepTitles ?? [], customPrompt)
 
+  // Resolve key: user's Groq or OpenAI key → fallback to app's Groq key
+  const resolved = await getUserKey(session.user.id, 'script')
+  const apiKey   = resolved?.key ?? process.env.GROQ_API_KEY
+  const isGroq   = !resolved || resolved.provider === 'groq'
+
+  if (!apiKey) return Response.json({ error: 'No API key configured for script AI' }, { status: 500 })
+
+  const client = new OpenAI({
+    apiKey,
+    ...(isGroq ? { baseURL: 'https://api.groq.com/openai/v1' } : {}),
+  })
+  const model = isGroq ? 'openai/gpt-oss-20b' : 'gpt-4o-mini'
+
   try {
-    const completion = await groq.chat.completions.create({
-      model: 'openai/gpt-oss-20b',
+    const completion = await client.chat.completions.create({
+      model,
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user',   content: userPrompt },

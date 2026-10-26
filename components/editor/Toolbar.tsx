@@ -622,6 +622,7 @@ export default function Toolbar() {
 
       <div className="w-px h-4 bg-neutral-700 mx-1" />
 
+
       <button
         onClick={
           selectedOverlayId ? () => removeOverlayLayer(selectedOverlayId) :

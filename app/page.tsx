@@ -129,7 +129,9 @@ export default function ListingPage() {
   const [loading, setLoading] = useState(false)
   const [loadingLabel, setLoadingLabel] = useState('Loading…')
   const [uploadProgress, setUploadProgress] = useState(0)
-  const [limitError, setLimitError] = useState<string | null>(null)
+  const [limitError, setLimitError]     = useState<string | null>(null)
+  const [showUserMenu, setShowUserMenu] = useState(false)
+  const userMenuRef = useRef<HTMLDivElement>(null)
   const { data: session } = useSession()
   const user = session?.user ?? null
   const [dbProjects, setDbProjects] = useState<Array<{ id: string; name: string; createdAt: number; duration: number }>>([])
@@ -147,6 +149,16 @@ export default function ListingPage() {
       .catch(() => {})
       .finally(() => setDbLoaded(true))
   }, [])
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) {
+        setShowUserMenu(false)
+      }
+    }
+    if (showUserMenu) document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showUserMenu])
 
   async function handleSignOut() {
     await signOut()
@@ -255,16 +267,34 @@ export default function ListingPage() {
         <span className="text-white font-semibold tracking-tight">Eduser</span>
         <div className="flex items-center gap-3">
           {user && (
-            <>
-              <span className="text-xs text-neutral-500 hidden sm:block">{user.email}</span>
+            <div className="relative" ref={userMenuRef}>
               <button
-                onClick={handleSignOut}
-                className="text-xs text-neutral-500 hover:text-neutral-200 transition-colors"
+                onClick={() => setShowUserMenu(v => !v)}
+                className="w-7 h-7 rounded-full bg-neutral-700 hover:bg-neutral-600 text-white text-xs font-semibold flex items-center justify-center transition-colors"
+                title={user.email}
               >
-                Sign out
+                {user.email[0].toUpperCase()}
               </button>
-              <span className="w-px h-4 bg-neutral-700" />
-            </>
+              {showUserMenu && (
+                <div className="absolute right-0 top-9 w-52 bg-neutral-800 border border-neutral-700 rounded-xl shadow-2xl overflow-hidden z-50">
+                  <div className="px-3 py-2.5 border-b border-neutral-700">
+                    <p className="text-[11px] text-neutral-500 truncate">{user.email}</p>
+                  </div>
+                  <button
+                    onClick={() => { setShowUserMenu(false); router.push('/settings') }}
+                    className="w-full text-left px-3 py-2 text-xs text-neutral-300 hover:bg-neutral-700 hover:text-white transition-colors"
+                  >
+                    Settings
+                  </button>
+                  <button
+                    onClick={handleSignOut}
+                    className="w-full text-left px-3 py-2 text-xs text-neutral-400 hover:bg-neutral-700 hover:text-red-400 transition-colors"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           <button
             onClick={() => router.push('/record')}

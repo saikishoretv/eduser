@@ -278,8 +278,7 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
         const { step, idx } = eligible[i]
         setGeneratingId(step.id)
         setGenerateProgress({ current: i + 1, total: eligible.length })
-        const blob       = await generateSpeech(step.description, selectedVoice)
-        const duration   = blob.size / 2 / 24000
+        const { blob, duration } = await generateSpeech(step.description, selectedVoice)
         const layerId    = crypto.randomUUID()
         const fileName   = `voiceover-step-${idx + 1}.wav`
         const objectUrl  = URL.createObjectURL(blob)
@@ -316,8 +315,7 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
     setGeneratingId(step.id)
     try {
       warmUpTTS()
-      const blob       = await generateSpeech(step.description, voice)
-      const duration   = blob.size / 2 / 24000
+      const { blob, duration } = await generateSpeech(step.description, voice)
       const layerId    = crypto.randomUUID()
       const fileName   = `voiceover-step-${idx + 1}.wav`
       const objectUrl  = URL.createObjectURL(blob)
