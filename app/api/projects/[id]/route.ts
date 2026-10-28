@@ -44,6 +44,7 @@ export async function GET(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       ccSegments:    meta.ccSegments    ?? [],
       shapeLayers:   meta.shapeLayers   ?? [],
+      hideLayers:    meta.hideLayers    ?? [],
       steps: meta.steps ?? (meta.clips ?? []).map((c: any, i: number) => ({
         id: `${c.id}-step`,
         clipId: c.id,

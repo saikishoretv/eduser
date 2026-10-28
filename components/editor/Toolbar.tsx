@@ -38,6 +38,8 @@ export default function Toolbar() {
   const [showRemovePauses, setShowRemovePauses] = useState(false)
   const [textDrop, setTextDrop]   = useState<'format' | 'colors' | null>(null)
   const [dropPos, setDropPos]     = useState({ top: 0, left: 0 })
+  const [zoomDrop, setZoomDrop]                   = useState(false)
+  const [zoomDropPos, setZoomDropPos]             = useState({ top: 0, left: 0 })
   const [transitionDrop, setTransitionDrop]       = useState(false)
   const [transitionDropPos, setTransitionDropPos] = useState({ top: 0, left: 0 })
   const [transitionTab, setTransitionTab]         = useState<'in' | 'out'>('in')
@@ -45,6 +47,7 @@ export default function Toolbar() {
   const [highlightsDropPos, setHighlightsDropPos] = useState({ top: 0, left: 0 })
   const formatBtnRef      = useRef<HTMLButtonElement>(null)
   const colorsBtnRef      = useRef<HTMLButtonElement>(null)
+  const zoomBtnRef        = useRef<HTMLButtonElement>(null)
   const transitionBtnRef  = useRef<HTMLButtonElement>(null)
   const highlightsBtnRef  = useRef<HTMLButtonElement>(null)
   const formatPanelRef    = useRef<HTMLDivElement>(null)
@@ -116,6 +119,11 @@ export default function Toolbar() {
   const addShapeLayer      = useEditorStore(s => s.addShapeLayer)
   const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
   const removeShapeLayer   = useEditorStore(s => s.removeShapeLayer)
+  const selectedHideLayerId    = useEditorStore(s => s.selectedHideLayerId)
+  const setSelectedHideLayerId = useEditorStore(s => s.setSelectedHideLayerId)
+  const addHideLayer           = useEditorStore(s => s.addHideLayer)
+  const updateHideLayer        = useEditorStore(s => s.updateHideLayer)
+  const removeHideLayer        = useEditorStore(s => s.removeHideLayer)
   const playheadTime       = useEditorStore(s => s.playheadTime)
   const project       = projects.find(p => p.id === activeProjectId) ?? null
   const hasSelection  = selectedClipIds.length > 0
@@ -182,6 +190,7 @@ export default function Toolbar() {
   const selectedOverlay     = project?.overlayLayers?.find(ol => ol.id === selectedOverlayId) ?? null
   const selectedAudioLayer  = project?.audioLayers?.find(l => l.id === selectedAudioLayerId) ?? null
   const selectedShape       = project?.shapeLayers?.find(sl => sl.id === selectedShapeId) ?? null
+  const selectedHide        = project?.hideLayers?.find(hl => hl.id === selectedHideLayerId) ?? null
 
   const activeTextFormatPreset = selectedOverlay?.type === 'text'
     ? TEXT_FORMAT_PRESETS.find(p => {
@@ -710,58 +719,29 @@ export default function Toolbar() {
 
           <div className="w-px h-4 bg-neutral-700 mx-1" />
 
-          {/* Zoom group: slider + preset dropdown + optional transition duration */}
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded border border-neutral-700 bg-neutral-800/50">
-            <span className="text-[11px] text-neutral-500">Zoom</span>
-            <input
-              type="range"
-              min={1}
-              max={3}
-              step={0.05}
-              value={avgZoom}
-              onChange={e => handleZoomChange(parseFloat(e.target.value))}
-              aria-label="Clip zoom level"
-              className="w-24 accent-blue-500"
-            />
-            <span className="text-[11px] text-neutral-400 tabular-nums w-8">{avgZoom.toFixed(2)}×</span>
-            {avgZoom !== 1 && (
-              <button
-                onClick={() => handleZoomChange(1)}
-                className="text-[10px] text-neutral-500 hover:text-neutral-300 transition-colors"
-              >
-                reset
-              </button>
-            )}
-            <div className="w-px h-4 bg-neutral-700" />
-            <select
-              value={activeZoomPreset === 'mixed' ? '' : activeZoomPreset}
-              onChange={e => handlePresetChange(e.target.value as ZoomPreset)}
-              aria-label="Zoom preset"
-              className="bg-neutral-800 border border-neutral-600 rounded px-1.5 py-0.5 text-[11px] text-white cursor-pointer"
-            >
-              {activeZoomPreset === 'mixed' && <option value="">mixed</option>}
-              <option value="none">Static</option>
-              <option value="punch">In / Out</option>
-              <option value="ken-burns">Ken Burns</option>
-            </select>
-            {activeZoomPreset === 'punch' && (
-              <>
-                <div className="w-px h-4 bg-neutral-700" />
-                <span className="text-[11px] text-neutral-500">Duration</span>
-                <input
-                  type="range"
-                  min={0.1}
-                  max={2}
-                  step={0.1}
-                  value={avgTransition}
-                  onChange={e => handleTransitionChange(parseFloat(e.target.value))}
-                  aria-label="Zoom transition duration"
-                  className="w-20 accent-blue-500"
-                />
-                <span className="text-[11px] text-neutral-400 tabular-nums w-8">{avgTransition.toFixed(1)}s</span>
-              </>
-            )}
-          </div>
+          {/* Zoom dropdown button */}
+          <button
+            ref={zoomBtnRef}
+            onClick={() => {
+              const rect = zoomBtnRef.current?.getBoundingClientRect()
+              if (rect) setZoomDropPos({ top: rect.bottom + 4, left: rect.left })
+              setTransitionDrop(false)
+              setZoomDrop(prev => !prev)
+            }}
+            aria-haspopup="true"
+            aria-expanded={zoomDrop}
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] border transition-colors shrink-0 ${
+              zoomDrop
+                ? 'bg-neutral-700 border-neutral-500 text-white'
+                : avgZoom !== 1 || activeZoomPreset !== 'none'
+                  ? 'bg-neutral-800 border-blue-600/60 text-white'
+                  : 'bg-neutral-800 border-neutral-700 text-neutral-300 hover:text-white hover:border-neutral-500'
+            }`}
+          >
+            {(avgZoom !== 1 || activeZoomPreset !== 'none') && <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />}
+            Zoom
+            <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 8 6" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><path d="M1 1l3 3 3-3"/></svg>
+          </button>
 
           <div className="w-px h-4 bg-neutral-700 mx-1" />
           <button
@@ -769,6 +749,7 @@ export default function Toolbar() {
             onClick={() => {
               const rect = transitionBtnRef.current?.getBoundingClientRect()
               if (rect) setTransitionDropPos({ top: rect.bottom + 4, left: rect.left })
+              setZoomDrop(false)
               setTransitionDrop(prev => !prev)
             }}
             aria-haspopup="true"
@@ -785,6 +766,84 @@ export default function Toolbar() {
             Transition
             <svg className="w-2.5 h-2.5 opacity-50" fill="none" viewBox="0 0 8 6" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round"><path d="M1 1l3 3 3-3"/></svg>
           </button>
+        </>
+      )}
+
+      {/* Zoom dropdown — fixed position so it escapes the flex row */}
+      {zoomDrop && hasSelection && (
+        <>
+          <div className="fixed inset-0 z-[998]" onClick={() => setZoomDrop(false)} />
+          <div
+            role="dialog"
+            aria-label="Zoom options"
+            className="fixed z-[999] bg-neutral-800 border border-neutral-700 rounded-lg shadow-2xl p-3 w-56 flex flex-col gap-3"
+            style={{ top: zoomDropPos.top, left: zoomDropPos.left }}
+            onKeyDown={e => { if (e.key === 'Escape') { setZoomDrop(false); zoomBtnRef.current?.focus() } }}
+          >
+            {/* Zoom level */}
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-neutral-400">Level</span>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[11px] text-neutral-300 tabular-nums">{avgZoom.toFixed(2)}×</span>
+                  {avgZoom !== 1 && (
+                    <button
+                      onClick={() => handleZoomChange(1)}
+                      className="text-[10px] text-neutral-500 hover:text-neutral-300 transition-colors"
+                    >
+                      reset
+                    </button>
+                  )}
+                </div>
+              </div>
+              <input
+                type="range"
+                min={1}
+                max={3}
+                step={0.05}
+                value={avgZoom}
+                onChange={e => handleZoomChange(parseFloat(e.target.value))}
+                aria-label="Clip zoom level"
+                className="w-full accent-blue-500"
+              />
+            </div>
+
+            {/* Preset */}
+            <div className="flex items-center justify-between">
+              <span className="text-[11px] text-neutral-400">Animation</span>
+              <select
+                value={activeZoomPreset === 'mixed' ? '' : activeZoomPreset}
+                onChange={e => handlePresetChange(e.target.value as ZoomPreset)}
+                aria-label="Zoom preset"
+                className="bg-neutral-700 border border-neutral-600 rounded px-1.5 py-0.5 text-[11px] text-white cursor-pointer"
+              >
+                {activeZoomPreset === 'mixed' && <option value="">mixed</option>}
+                <option value="none">Static</option>
+                <option value="punch">In / Out</option>
+                <option value="ken-burns">Ken Burns</option>
+              </select>
+            </div>
+
+            {/* Transition duration — only for punch preset */}
+            {activeZoomPreset === 'punch' && (
+              <div className="flex flex-col gap-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-neutral-400">Duration</span>
+                  <span className="text-[11px] text-neutral-300 tabular-nums">{avgTransition.toFixed(1)}s</span>
+                </div>
+                <input
+                  type="range"
+                  min={0.1}
+                  max={2}
+                  step={0.1}
+                  value={avgTransition}
+                  onChange={e => handleTransitionChange(parseFloat(e.target.value))}
+                  aria-label="Zoom transition duration"
+                  className="w-full accent-blue-500"
+                />
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -910,6 +969,33 @@ export default function Toolbar() {
               </svg>
               Ripple
             </button>
+            <div className="h-px bg-neutral-700 my-1" />
+            <button
+              onClick={() => {
+                addHideLayer({ id: crypto.randomUUID(), style: 'black', startAt: playheadTime, duration: 3, x: 30, y: 30, w: 40, h: 30 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 24 24">
+                <rect x="3" y="6" width="18" height="12" rx="2" />
+              </svg>
+              Hide (Black)
+            </button>
+            <button
+              onClick={() => {
+                addHideLayer({ id: crypto.randomUUID(), style: 'blur', startAt: playheadTime, duration: 3, x: 30, y: 30, w: 40, h: 30 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0 opacity-60" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <rect x="3" y="6" width="18" height="12" rx="2" />
+                <line x1="3" y1="10" x2="21" y2="10" strokeOpacity="0.5" />
+                <line x1="3" y1="14" x2="21" y2="14" strokeOpacity="0.5" />
+              </svg>
+              Hide (Blur)
+            </button>
           </div>
         </>
       )}
@@ -946,6 +1032,41 @@ export default function Toolbar() {
           <div className="w-px h-4 bg-neutral-700 mx-1" />
           <button
             onClick={() => { removeShapeLayer(selectedShape.id); setSelectedShapeId(null) }}
+            className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium text-neutral-400 hover:bg-red-950 hover:text-red-400 transition-colors"
+          >
+            Delete
+          </button>
+        </>
+      )}
+
+      {selectedHide && (
+        <>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <span className="text-[11px] text-neutral-400 font-medium shrink-0 capitalize">{selectedHide.style === 'blur' ? 'Blur' : 'Hide'} Region</span>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <span className="text-[11px] text-neutral-500 shrink-0">X</span>
+          <input type="range" min={0} max={90} step={1} value={Math.round(selectedHide.x)}
+            onChange={e => updateHideLayer(selectedHide.id, { x: parseFloat(e.target.value) })}
+            className="w-14 accent-purple-400" />
+          <span className="text-[11px] text-neutral-400 tabular-nums w-7 shrink-0">{Math.round(selectedHide.x)}%</span>
+          <span className="text-[11px] text-neutral-500 shrink-0">Y</span>
+          <input type="range" min={0} max={90} step={1} value={Math.round(selectedHide.y)}
+            onChange={e => updateHideLayer(selectedHide.id, { y: parseFloat(e.target.value) })}
+            className="w-14 accent-purple-400" />
+          <span className="text-[11px] text-neutral-400 tabular-nums w-7 shrink-0">{Math.round(selectedHide.y)}%</span>
+          <span className="text-[11px] text-neutral-500 shrink-0">W</span>
+          <input type="range" min={5} max={100} step={1} value={Math.round(selectedHide.w)}
+            onChange={e => updateHideLayer(selectedHide.id, { w: parseFloat(e.target.value) })}
+            className="w-14 accent-purple-400" />
+          <span className="text-[11px] text-neutral-400 tabular-nums w-7 shrink-0">{Math.round(selectedHide.w)}%</span>
+          <span className="text-[11px] text-neutral-500 shrink-0">H</span>
+          <input type="range" min={5} max={100} step={1} value={Math.round(selectedHide.h)}
+            onChange={e => updateHideLayer(selectedHide.id, { h: parseFloat(e.target.value) })}
+            className="w-14 accent-purple-400" />
+          <span className="text-[11px] text-neutral-400 tabular-nums w-7 shrink-0">{Math.round(selectedHide.h)}%</span>
+          <div className="w-px h-4 bg-neutral-700 mx-1" />
+          <button
+            onClick={() => { removeHideLayer(selectedHide.id); setSelectedHideLayerId(null) }}
             className="flex items-center gap-1 px-2.5 py-1.5 rounded text-xs font-medium text-neutral-400 hover:bg-red-950 hover:text-red-400 transition-colors"
           >
             Delete

@@ -119,6 +119,7 @@ const EMPTY_SOURCES: import('@/types').SourceVideo[] = []
 const EMPTY_AUDIO_LAYERS: import('@/types').AudioLayer[] = []
 const EMPTY_OVERLAY_LAYERS: import('@/types').OverlayLayer[] = []
 const EMPTY_SHAPE_LAYERS: import('@/types').ShapeLayer[] = []
+const EMPTY_HIDE_LAYERS: import('@/types').HideLayer[] = []
 
 // Each handle: [relX, relY] (0=left/top, 0.5=mid, 1=right/bottom), cursor
 const RESIZE_HANDLES: [number, number, string][] = [
@@ -269,6 +270,7 @@ export default function Preview() {
   const executeFreezeFrame  = useEditorStore(s => s.executeFreezeFrame)
   const cancelFreezeFrame   = useEditorStore(s => s.cancelFreezeFrame)
   const shapeLayers        = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_SHAPE_LAYERS)
+  const hideLayers         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.hideLayers ?? EMPTY_HIDE_LAYERS)
   const selectedShapeId    = useEditorStore(s => s.selectedShapeId)
   const setSelectedShapeId = useEditorStore(s => s.setSelectedShapeId)
   const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
@@ -294,7 +296,6 @@ export default function Preview() {
   // React's reconciler is always the source of truth (avoids conflict with imperative applyClip mutations)
   const isImageClip      = !!activeSource?.isImage
   const isBackgroundClip = !!activeClipBackground
-  console.log('[render] isImageClip:', isImageClip, 'ph:', playheadTime.toFixed(2), 'src:', activeSource?.id, 'objUrl:', activeSource?.objectUrl?.slice(0,30))
 
   // Subtitles: use ccSegments (timeline-time based) for direct lookup — no source-time mapping needed
   const ccSegments  = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.ccSegments ?? EMPTY_CC_SEGMENTS)
@@ -375,7 +376,6 @@ export default function Preview() {
   useEffect(() => {
     if (!pendingFreezeFrame) return
     const video = videoRef.current
-    console.log('[freeze] capture. video:', !!video, 'videoWidth:', video?.videoWidth)
     if (!video || !video.videoWidth) { cancelFreezeFrame(); return }
     const canvas = document.createElement('canvas')
     canvas.width = video.videoWidth
@@ -383,13 +383,29 @@ export default function Preview() {
     const ctx = canvas.getContext('2d')
     if (!ctx) { cancelFreezeFrame(); return }
     ctx.drawImage(video, 0, 0)
-    canvas.toBlob(blob => {
-      console.log('[freeze] toBlob:', blob?.size, 'bytes')
+    canvas.toBlob(async blob => {
       if (!blob) { cancelFreezeFrame(); return }
       const sourceId = crypto.randomUUID()
       const objectUrl = URL.createObjectURL(blob)
-      console.log('[freeze] executeFreezeFrame. objectUrl:', objectUrl)
-      executeFreezeFrame(sourceId, objectUrl, canvas.width, canvas.height)
+
+      // Upload to S3 so the frame survives page reloads
+      let s3Key: string | undefined
+      try {
+        const urlRes = await fetch('/api/sources/upload-url', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sourceId, fileName: 'freeze.jpg', contentType: 'image/jpeg' }),
+        })
+        if (urlRes.ok) {
+          const { uploadUrl, s3Key: key } = await urlRes.json()
+          await fetch(uploadUrl, { method: 'PUT', body: blob, headers: { 'Content-Type': 'image/jpeg' } })
+          s3Key = key
+        }
+      } catch {
+        // Upload failure is non-fatal — frame still works in current session
+      }
+
+      executeFreezeFrame(sourceId, objectUrl, canvas.width, canvas.height, s3Key)
     }, 'image/jpeg', 0.95)
   }, [pendingFreezeFrame]) // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -431,15 +447,15 @@ export default function Preview() {
     if (!timing) return
     activeClipIdxRef.current = clipIdx
     if (timing.clip.background) {
-      if (video.src) video.src = ''
+      // Don't clear video.src — retaining it keeps the container's intrinsic size intact
+      // so the aspect-ratio container doesn't collapse when no video content is shown.
       return
     }
     const source = sourcesRef.current.find(s => s.id === timing.clip.sourceId)
     if (!source) return
     if (source.isImage) {
-      console.log('[applyClip] image clip idx:', clipIdx, 'objectUrl:', source.objectUrl?.slice(0,30))
-      // Freeze frame — clear video src; img src and display are handled reactively
-      if (video.src) video.src = ''
+      // Freeze frame — img src/display are handled reactively.
+      // Don't clear video.src — retaining it keeps the container's intrinsic size intact.
       return
     }
     // Normal video clip — display handled reactively; just set src/time
@@ -810,8 +826,10 @@ export default function Preview() {
               src={activeSource?.isImage ? (activeSource.objectUrl || undefined) : undefined}
               className="absolute inset-0 w-full h-full"
               style={{
-                objectFit: outputFormat ? 'cover' : 'contain',
+                objectFit: 'cover',
                 objectPosition: `${currentCrop.x}% ${currentCrop.y}%`,
+                transform: currentZoom !== 1 ? `scale(${currentZoom})` : undefined,
+                transformOrigin: `${currentCrop.x}% ${currentCrop.y}%`,
                 display: (isImageClip && !!activeSource?.objectUrl) ? '' : 'none',
               }}
             />
@@ -945,6 +963,28 @@ export default function Preview() {
                       />
                     ))}
                   </div>
+                )
+              })}
+            </div>
+
+            {/* Hide layers */}
+            <div className="absolute inset-0 pointer-events-none">
+              {hideLayers.map(hl => {
+                if (t < hl.startAt || t >= hl.startAt + hl.duration) return null
+                return (
+                  <div
+                    key={hl.id}
+                    className="absolute"
+                    style={{
+                      left: `${hl.x}%`,
+                      top: `${hl.y}%`,
+                      width: `${hl.w}%`,
+                      height: `${hl.h}%`,
+                      ...(hl.style === 'black'
+                        ? { background: '#000' }
+                        : { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }),
+                    }}
+                  />
                 )
               })}
             </div>

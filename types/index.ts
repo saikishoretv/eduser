@@ -118,6 +118,17 @@ export interface ShapeLayer {
   opacity: number       // overall opacity 0–1
 }
 
+export interface HideLayer {
+  id: string
+  style: 'black' | 'blur'
+  startAt: number   // timeline seconds
+  duration: number  // seconds visible
+  x: number         // % of frame width (top-left)
+  y: number         // % of frame height (top-left)
+  w: number         // % of frame width
+  h: number         // % of frame height
+}
+
 export interface Step {
   id: string
   clipId: string       // references a Clip
@@ -138,4 +149,5 @@ export interface Project {
   steps?: Step[]       // present for walkthrough projects
   ccSegments?: CcSegment[]
   shapeLayers?: ShapeLayer[]
+  hideLayers?: HideLayer[]
 }

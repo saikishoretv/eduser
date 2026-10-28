@@ -109,6 +109,7 @@ export default function EditorShell({ projectId }: Props) {
         s.clearSelection()
         s.setSelectedAudioLayerId(null)
         s.setSelectedOverlayId(null)
+        s.setSelectedHideLayerId(null)
       } else if (e.key === 's' && !e.metaKey && !e.ctrlKey) {
         if (!overlayMode) audioMode ? s.splitAudioLayer() : s.split()
       } else if (e.key === 'f' && !e.metaKey && !e.ctrlKey) {
@@ -136,7 +137,8 @@ export default function EditorShell({ projectId }: Props) {
         e.preventDefault()
         s.redo()
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (overlayMode) s.removeOverlayLayer(s.selectedOverlayId!)
+        if (s.selectedHideLayerId) s.removeHideLayer(s.selectedHideLayerId)
+        else if (overlayMode) s.removeOverlayLayer(s.selectedOverlayId!)
         else if (audioMode) s.removeAudioLayer(s.selectedAudioLayerId!)
         else s.deleteSelected()
       }

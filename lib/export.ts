@@ -1,6 +1,6 @@
 // @ffmpeg/ffmpeg is loaded at runtime via UMD script tag (public/ffmpeg.js)
 // to avoid Turbopack/webpack mangling its `new Worker(new URL(..., import.meta.url))` call.
-import { Clip, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, CcSegment, ShapeLayer } from '@/types'
+import { Clip, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, CcSegment, ShapeLayer, HideLayer } from '@/types'
 import { FormatPreset } from '@/lib/formats'
 import { SubtitleStyle, SubtitlePosition, TransitionType } from '@/store/store'
 import { SubtitleAppearance, StandardSubtitleAppearance } from '@/lib/subtitleTemplates'
@@ -14,6 +14,7 @@ export interface ExportOptions {
   outputFormat: FormatPreset | null
   clipCrops: Record<string, { x: number; y: number }>
   clipZooms: Record<string, number>
+  clipZoomPresets: Record<string, string>
   clipSpeeds: Record<string, number>
   resolution: 720 | 1080
   audioLayers: AudioLayer[]
@@ -28,6 +29,7 @@ export interface ExportOptions {
   subtitleAppearance: SubtitleAppearance
   standardSubtitleAppearance: StandardSubtitleAppearance
   shapeLayers: ShapeLayer[]
+  hideLayers: HideLayer[]
   onProgress: (ratio: number) => void
 }
 
@@ -502,14 +504,57 @@ function buildAtempoChain(speed: number): string {
   return ',' + filters.join(',')
 }
 
+// ─── Zoom preset filter builder ───────────────────────────────────────────────
+// Returns a zoompan filter string (no leading comma) for 'punch' or 'ken-burns'.
+// Assumes input frame is already outW×outH (caller pre-scales to cover).
+function buildZoomPanFilter(
+  preset: string,
+  zoom: number,
+  crop: { x: number; y: number },
+  timelineDur: number,
+  outW: number,
+  outH: number,
+  transDur: number,
+): string {
+  const d = Math.max(2, Math.ceil(timelineDur * 30))
+  const safeD = d - 1  // max frame index for p = on/safeD ∈ [0,1]
+  const Z = zoom.toFixed(6)
+  const cx = (crop.x / 100).toFixed(6)
+  const cy = (crop.y / 100).toFixed(6)
+  // x/y: position of the crop window in the input (already outW×outH)
+  // x = iw*(1-1/zoom)*cropFrac, clamped to [0, iw-iw/zoom]
+  const staticX = `max(0,min(iw-iw/zoom,iw*(1-1/zoom)*${cx}))`
+  const staticY = `max(0,min(ih-ih/zoom,ih*(1-1/zoom)*${cy}))`
+
+  if (preset === 'ken-burns') {
+    const endCX = ((100 - crop.x) / 100).toFixed(6)
+    const endCY = ((100 - crop.y) / 100).toFixed(6)
+    const p = `(on/${safeD})`
+    const animCX = `(${cx}+(${(parseFloat(endCX) - parseFloat(cx)).toFixed(6)})*${p})`
+    const animCY = `(${cy}+(${(parseFloat(endCY) - parseFloat(cy)).toFixed(6)})*${p})`
+    const zExpr = `(1+(${Z}-1)*${p})`
+    const xExpr = `max(0,min(iw-iw/zoom,iw*(1-1/zoom)*${animCX}))`
+    const yExpr = `max(0,min(ih-ih/zoom,ih*(1-1/zoom)*${animCY}))`
+    return `zoompan=z='${zExpr}':x='${xExpr}':y='${yExpr}':d=${d}:fps=30:s=${outW}x${outH}`
+  }
+
+  // punch: ease-in zoom → hold → ease-out zoom
+  const ph = Math.min(transDur / Math.max(timelineDur, 0.01), 0.45).toFixed(6)
+  const p = `(on/${safeD})`
+  const inScale  = `(1+(${Z}-1)*(1-pow(1-${p}/${ph},2)))`
+  const outScale = `(${Z}-(${Z}-1)*pow((${p}-(1-${ph}))/${ph},2))`
+  const zExpr = `if(lt(${p},${ph}),${inScale},if(gt(${p},1-${ph}),${outScale},${Z}))`
+  return `zoompan=z='${zExpr}':x='${staticX}':y='${staticY}':d=${d}:fps=30:s=${outW}x${outH}`
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 
 export async function exportVideo(opts: ExportOptions): Promise<Blob> {
   const {
-    clips, sources, ccSegments, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds,
+    clips, sources, ccSegments, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipZoomPresets, clipSpeeds,
     clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations,
     resolution, subtitleStyle, subtitlePosition, subtitleFontSize, subtitleAppearance,
-    standardSubtitleAppearance, shapeLayers, onProgress,
+    standardSubtitleAppearance, shapeLayers, hideLayers, onProgress,
   } = opts
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -521,296 +566,165 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     throw new Error(`Failed to load FFmpeg: ${err instanceof Error ? err.message : err}`)
   }
   console.log('[export] FFmpeg loaded')
-  onProgress(0) // transition UI from "Loading FFmpeg…" → "Exporting…"
+  onProgress(0)
 
-  const progressHandler = ({ progress }: { progress: number }) => onProgress(Math.max(0, Math.min(1, progress)))
   const logHandler = ({ message }: { message: string }) => console.log('[ffmpeg]', message)
-  ffmpeg.on('progress', progressHandler)
   ffmpeg.on('log', logHandler)
 
   try {
     const timings = getClipTimings(clips, clipSpeeds)
     const totalDuration = timings.length > 0 ? timings[timings.length - 1].end : 0
+    const N = timings.length
 
-    // Write source files to FFmpeg virtual FS (deduplicated by sourceId).
-    // Background clips and image clips don't need a video source file — skip them.
-    const writtenSources = new Set<string>()
-    for (const clip of clips) {
-      if (clip.background) continue  // handled via canvas PNG
-      if (writtenSources.has(clip.sourceId)) continue
-      const source = sources.find(s => s.id === clip.sourceId)
-      if (!source) { console.warn('[export] source not found for clip', clip.id); continue }
-      if (!source.objectUrl) { console.warn('[export] source has no objectUrl', clip.sourceId); continue }
-      console.log(`[export] writing source src_${clip.sourceId}.mp4 from ${source.objectUrl.slice(0, 60)}`)
-      await ffmpeg.writeFile(`src_${clip.sourceId}.mp4`, await fetchFile(source.objectUrl))
-      writtenSources.add(clip.sourceId)
-    }
-
-    // Write audio layer files to FFmpeg virtual FS
-    for (const layer of audioLayers) {
-      if (!layer.objectUrl) { console.warn('[export] audio layer missing objectUrl', layer.id); continue }
-      const ext = layer.fileName.split('.').pop() ?? 'mp3'
-      console.log(`[export] writing audio layer audio_${layer.id}.${ext}`)
-      await ffmpeg.writeFile(`audio_${layer.id}.${ext}`, await fetchFile(layer.objectUrl))
-    }
-
-    // Determine output dimensions.
-    // `resolution` = the SHORT side (standard convention: 1080p means 1080px on the shorter axis).
-    // Landscape/square: short side = height. Portrait: short side = width.
+    // ── Output dimensions ────────────────────────────────────────────────────
     let targetW: number, targetH: number
     if (outputFormat) {
       if (outputFormat.aspectW >= outputFormat.aspectH) {
-        // Landscape or square: short side is height
         targetH = resolution
         targetW = Math.round(resolution * outputFormat.aspectW / outputFormat.aspectH)
       } else {
-        // Portrait: short side is width
         targetW = resolution
         targetH = Math.round(resolution * outputFormat.aspectH / outputFormat.aspectW)
       }
     } else {
-      // "Original" — preserve source aspect ratio, resolution = short side
       const firstSource = sources.find(s => clips.some(c => c.sourceId === s.id))
       const srcW = firstSource?.width ?? 1920
       const srcH = firstSource?.height ?? 1080
       if (srcW >= srcH) {
-        // Landscape or square: short side is height
         targetH = resolution
         targetW = Math.round(resolution * srcW / srcH)
       } else {
-        // Portrait: short side is width
         targetW = resolution
         targetH = Math.round(resolution * srcH / srcW)
       }
     }
-
-    // Ensure even dimensions (required by H.264)
     const outW = targetW % 2 === 0 ? targetW : targetW + 1
     const outH = targetH % 2 === 0 ? targetH : targetH + 1
-    console.log(`[export] output dimensions: ${outW}x${outH}`)
+    console.log(`[export] output dimensions: ${outW}x${outH}, clips: ${N}`)
 
-    // Build subtitle events (canvas-rendered, no FFmpeg font dependency)
+    // ── Pre-detect audio from objectUrls (before any FS writes) ─────────────
+    const sourceAudioMap = new Map<string, boolean>()
+    for (const clip of clips) {
+      if (clip.background || sourceAudioMap.has(clip.sourceId)) continue
+      const src = sources.find(s => s.id === clip.sourceId)
+      if (!src || src.isImage || !src.objectUrl) { sourceAudioMap.set(clip.sourceId, false); continue }
+      sourceAudioMap.set(clip.sourceId, await detectAudioTrack(src.objectUrl))
+    }
+
+    // ── Subtitle setup ───────────────────────────────────────────────────────
     const subEvents: SubEvent[] = subtitleStyle !== 'off' && ccSegments.length > 0
       ? buildSubEvents(ccSegments, subtitleStyle as 'standard' | 'highlight')
       : []
-    console.log(`[export] ${subEvents.length} subtitle events (style: ${subtitleStyle}, fontSize: ${subtitleFontSize})`)
+    const subFontPx = Math.round(outH * 0.045 * subtitleFontSize)
+    const subLineH  = Math.round(subFontPx * 1.4)
+    const STRIP_H   = subtitleStyle === 'highlight'
+      ? Math.round(subLineH * 1 + subFontPx * 0.6)
+      : Math.round(subLineH * 3 + subFontPx * 0.6)
 
-    // Build filter graph
-    // Always re-detect audio via HTMLVideoElement so projects uploaded before the audioTracks
-    // Chrome bug was fixed still export with correct audio (stored hasAudio may be wrong).
-    const sourceAudioMap = new Map<string, boolean>()
-    for (const sourceId of writtenSources) {
-      const src = sources.find(s => s.id === sourceId)
-      if (!src || src.isImage) { sourceAudioMap.set(sourceId, false); continue }
-      sourceAudioMap.set(sourceId, src.objectUrl ? await detectAudioTrack(src.objectUrl) : false)
+    for (let si = 0; si < subEvents.length; si++) {
+      const pngData = await renderSubEvent(
+        subEvents[si], outW, outH, STRIP_H,
+        subtitleStyle as 'standard' | 'highlight', subtitlePosition,
+        subtitleFontSize, standardSubtitleAppearance, subtitleAppearance,
+      )
+      await ffmpeg.writeFile(`sub_${si}.png`, pngData)
+    }
+    if (subEvents.length > 0) {
+      const blankCanvas = document.createElement('canvas')
+      blankCanvas.width = outW; blankCanvas.height = STRIP_H
+      const blankBlob = await new Promise<Blob>(r => blankCanvas.toBlob(b => r(b!), 'image/png'))
+      await ffmpeg.writeFile('sub_blank.png', new Uint8Array(await blankBlob.arrayBuffer()))
+      console.log(`[export] wrote ${subEvents.length} subtitle strip PNGs (${STRIP_H}px tall)`)
     }
 
-    const filterParts: string[] = []
-    const inputArgs: string[] = []
-    const sourceIndexMap = new Map<string, number>()
-    let inputIdx = 0
-
-    for (const sourceId of writtenSources) {
-      const src = sources.find(s => s.id === sourceId)
-      if (src?.isImage) {
-        // Freeze-frame: loop the single JPEG frame so trim filters work normally
-        inputArgs.push('-loop', '1', '-framerate', '25', '-i', `src_${sourceId}.mp4`)
-      } else {
-        inputArgs.push('-i', `src_${sourceId}.mp4`)
-      }
-      sourceIndexMap.set(sourceId, inputIdx++)
-    }
-
-    // Pre-render background clips (solid / gradient) to PNG so FFmpeg can use them
-    const bgClipInputIndices = new Map<string, number>()
-    for (const clip of clips) {
-      if (!clip.background) continue
-      const canvas = document.createElement('canvas')
-      canvas.width = outW
-      canvas.height = outH
-      const ctx = canvas.getContext('2d')!
-      if (clip.background.type === 'solid') {
-        ctx.fillStyle = clip.background.value
-        ctx.fillRect(0, 0, outW, outH)
-      } else {
-        // Gradient: parse linear-gradient(angle, stop1, stop2, ...) into CanvasGradient
-        const m = clip.background.value.match(/linear-gradient\(\s*([^,]+),\s*(.+)\)/i)
-        if (m) {
-          const angleDeg = parseFloat(m[1]) || 180
-          const rad = (angleDeg - 90) * Math.PI / 180
-          const grd = ctx.createLinearGradient(
-            (0.5 - Math.cos(rad) * 0.5) * outW, (0.5 - Math.sin(rad) * 0.5) * outH,
-            (0.5 + Math.cos(rad) * 0.5) * outW, (0.5 + Math.sin(rad) * 0.5) * outH,
-          )
-          m[2].split(',').forEach((stop, idx, arr) => {
-            const parts = stop.trim().split(/\s+/)
-            grd.addColorStop(parts[1] ? parseFloat(parts[1]) / 100 : idx / Math.max(arr.length - 1, 1), parts[0])
-          })
-          ctx.fillStyle = grd
-          ctx.fillRect(0, 0, outW, outH)
-        } else {
-          ctx.fillStyle = '#000000'
-          ctx.fillRect(0, 0, outW, outH)
-        }
-      }
-      const pngBlob2 = await new Promise<Blob>(r => canvas.toBlob(b => r(b!), 'image/png'))
-      const pngArr = new Uint8Array(await pngBlob2.arrayBuffer() as ArrayBuffer)
-      const pngFile = `bg_${clip.id}.png`
-      await ffmpeg.writeFile(pngFile, pngArr)
-      inputArgs.push('-loop', '1', '-framerate', '25', '-i', pngFile)
-      bgClipInputIndices.set(clip.id, inputIdx++)
-    }
-
-    // Audio layer inputs (after all video sources)
-    const audioLayerInputIndices: number[] = []
-    for (const layer of audioLayers) {
-      if (!layer.objectUrl) continue
-      const ext = layer.fileName.split('.').pop() ?? 'mp3'
-      inputArgs.push('-i', `audio_${layer.id}.${ext}`)
-      audioLayerInputIndices.push(inputIdx++)
-    }
-
-    // Shape layer inputs — draw-on animation as a PNG image sequence.
-    // Each shape generates frameCount frames (progress 0→1 over 0.8s ease-out).
-    // -itsoffset sl.startAt delays the sequence to the shape's timeline position so the
-    // animation starts exactly when the shape appears. eof_action=repeat (overlay default)
-    // holds the last fully-drawn frame for the rest of the shape's visible duration.
-    // The overlay filter skips consuming input 1 when enable=0, so no frames are wasted.
+    // ── Shape layer animation frames ─────────────────────────────────────────
     const SHAPE_ANIM_FPS = 30
-    const shapeInputInfos: { animIdx: number; frameCount: number; looping?: boolean }[] = []
+    const shapeInfos: { frameCount: number; looping?: boolean }[] = []
     for (const sl of shapeLayers) {
       const canvas = document.createElement('canvas')
-      canvas.width  = outW
-      canvas.height = outH
+      canvas.width = outW; canvas.height = outH
       const ctx = canvas.getContext('2d')!
       const pxScale = outW / 640
 
       if (sl.type === 'ripple') {
-        // Two rings that expand and fade, looping every 1.5s.
-        // We generate exactly one cycle (45 frames) and loop them in filter_complex.
         const RIPPLE_CYCLE  = 1.5
-        const RIPPLE_OFFSET = 0.75  // ring 2 is half a cycle ahead (matches CSS animation-delay: -0.75s)
-        const frameCount    = Math.ceil(RIPPLE_CYCLE * SHAPE_ANIM_FPS)  // 45
-        const cx = outW * sl.x / 100
-        const cy = outH * sl.y / 100
+        const RIPPLE_OFFSET = 0.75
+        const frameCount = Math.ceil(RIPPLE_CYCLE * SHAPE_ANIM_FPS)
+        const cx = outW * sl.x / 100; const cy = outH * sl.y / 100
         const maxR = outW * sl.width / 100 / 2
-
         for (let n = 0; n < frameCount; n++) {
           const t = n / SHAPE_ANIM_FPS
-          ctx.clearRect(0, 0, outW, outH)
-          ctx.setLineDash([])
-
+          ctx.clearRect(0, 0, outW, outH); ctx.setLineDash([])
           for (let ring = 0; ring < 2; ring++) {
             const tOff      = ring === 0 ? 0 : RIPPLE_OFFSET
             const rawPhase  = ((t + tOff) % RIPPLE_CYCLE) / RIPPLE_CYCLE
-            const eased     = 1 - (1 - rawPhase) ** 2  // ease-out quadratic
+            const eased     = 1 - (1 - rawPhase) ** 2
             const ringR     = maxR * eased
             const ringAlpha = (1 - eased) * sl.strokeOpacity * sl.opacity
             if (ringAlpha < 0.005 || ringR < 0.5) continue
-            // Slight fill — matches SVG fillOpacity 0.12
-            ctx.globalAlpha = ringAlpha * 0.12
-            ctx.fillStyle   = sl.strokeColor
-            ctx.beginPath()
-            ctx.arc(cx, cy, ringR, 0, 2 * Math.PI)
-            ctx.fill()
-            // Ring stroke
-            ctx.globalAlpha = ringAlpha
-            ctx.strokeStyle = sl.strokeColor
-            ctx.lineWidth   = sl.strokeWidth * pxScale
-            ctx.beginPath()
-            ctx.arc(cx, cy, ringR, 0, 2 * Math.PI)
-            ctx.stroke()
+            ctx.globalAlpha = ringAlpha * 0.12; ctx.fillStyle = sl.strokeColor
+            ctx.beginPath(); ctx.arc(cx, cy, ringR, 0, 2 * Math.PI); ctx.fill()
+            ctx.globalAlpha = ringAlpha; ctx.strokeStyle = sl.strokeColor
+            ctx.lineWidth = sl.strokeWidth * pxScale
+            ctx.beginPath(); ctx.arc(cx, cy, ringR, 0, 2 * Math.PI); ctx.stroke()
           }
-          // Static center dot
           const dotR = Math.max(2, maxR * 0.1)
-          ctx.globalAlpha = 0.9 * sl.strokeOpacity * sl.opacity
-          ctx.fillStyle   = sl.strokeColor
-          ctx.beginPath()
-          ctx.arc(cx, cy, dotR, 0, 2 * Math.PI)
-          ctx.fill()
-
+          ctx.globalAlpha = 0.9 * sl.strokeOpacity * sl.opacity; ctx.fillStyle = sl.strokeColor
+          ctx.beginPath(); ctx.arc(cx, cy, dotR, 0, 2 * Math.PI); ctx.fill()
+          ctx.globalAlpha = 1
           const blob  = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'))
-          const bytes = new Uint8Array(await blob.arrayBuffer())
-          await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, bytes)
+          await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, new Uint8Array(await blob.arrayBuffer()))
         }
-
-        inputArgs.push('-itsoffset', sl.startAt.toFixed(6), '-framerate', String(SHAPE_ANIM_FPS), '-i', `shape_${sl.id}_f%03d.png`)
-        shapeInputInfos.push({ animIdx: inputIdx++, frameCount, looping: true })
+        shapeInfos.push({ frameCount, looping: true })
       } else {
-        // Rectangle: draw-on stroke animation, hold last frame
-        const cx  = outW * sl.x / 100
-        const cy  = outH * sl.y / 100
-        const hw  = outW * sl.width  / 100 / 2
-        const hh  = outH * sl.height / 100 / 2
-        const W   = hw * 2
-        const H   = hh * 2
-        const x0  = cx - hw
-        const y0  = cy - hh
-        const r = Math.max(0, Math.min(sl.borderRadius * pxScale, hw, hh))
-        const perim  = r > 0 ? 2 * (W - 2 * r) + 2 * (H - 2 * r) + 2 * Math.PI * r : 2 * (W + H)
-
-        const animDur  = Math.min(0.8, sl.duration)
+        const cx  = outW * sl.x / 100; const cy  = outH * sl.y / 100
+        const hw  = outW * sl.width  / 100 / 2; const hh  = outH * sl.height / 100 / 2
+        const W   = hw * 2; const H   = hh * 2; const x0  = cx - hw; const y0  = cy - hh
+        const r   = Math.max(0, Math.min(sl.borderRadius * pxScale, hw, hh))
+        const perim = r > 0 ? 2 * (W - 2 * r) + 2 * (H - 2 * r) + 2 * Math.PI * r : 2 * (W + H)
+        const animDur   = Math.min(0.8, sl.duration)
         const frameCount = Math.max(2, Math.ceil(animDur * SHAPE_ANIM_FPS))
-
         for (let n = 0; n < frameCount; n++) {
-          const rawProg = frameCount === 1 ? 1 : n / (frameCount - 1)  // 0 → 1
-          const progress = 1 - (1 - rawProg) ** 2                       // ease-out quadratic
-          ctx.clearRect(0, 0, outW, outH)
-          ctx.globalAlpha = sl.opacity
+          const rawProg = frameCount === 1 ? 1 : n / (frameCount - 1)
+          const progress = 1 - (1 - rawProg) ** 2
+          ctx.clearRect(0, 0, outW, outH); ctx.globalAlpha = sl.opacity
           if (sl.strokeWidth > 0 && sl.strokeOpacity > 0) {
             ctx.strokeStyle = sl.strokeColor + Math.round(sl.strokeOpacity * 255).toString(16).padStart(2, '0')
-            ctx.lineWidth   = sl.strokeWidth * pxScale
-            ctx.setLineDash([perim, perim])
-            ctx.lineDashOffset = perim * (1 - progress)  // perim=invisible → 0=fully drawn
+            ctx.lineWidth = sl.strokeWidth * pxScale
+            ctx.setLineDash([perim, perim]); ctx.lineDashOffset = perim * (1 - progress)
             ctx.beginPath()
             if (r <= 0) {
-              ctx.moveTo(x0 + W, y0)
-              ctx.lineTo(x0 + W, y0 + H)
-              ctx.lineTo(x0,     y0 + H)
-              ctx.lineTo(x0,     y0)
-              ctx.closePath()
+              ctx.moveTo(x0 + W, y0); ctx.lineTo(x0 + W, y0 + H)
+              ctx.lineTo(x0, y0 + H); ctx.lineTo(x0, y0); ctx.closePath()
             } else {
               ctx.moveTo(x0 + W - r, y0)
-              ctx.arcTo(x0 + W, y0,     x0 + W, y0 + r,     r)
-              ctx.lineTo(x0 + W, y0 + H - r)
-              ctx.arcTo(x0 + W, y0 + H, x0 + W - r, y0 + H, r)
-              ctx.lineTo(x0 + r, y0 + H)
-              ctx.arcTo(x0,     y0 + H, x0,     y0 + H - r, r)
-              ctx.lineTo(x0,     y0 + r)
-              ctx.arcTo(x0,     y0,     x0 + r, y0,         r)
-              ctx.closePath()
+              ctx.arcTo(x0 + W, y0,     x0 + W, y0 + r,     r); ctx.lineTo(x0 + W, y0 + H - r)
+              ctx.arcTo(x0 + W, y0 + H, x0 + W - r, y0 + H, r); ctx.lineTo(x0 + r, y0 + H)
+              ctx.arcTo(x0,     y0 + H, x0,     y0 + H - r, r); ctx.lineTo(x0,     y0 + r)
+              ctx.arcTo(x0,     y0,     x0 + r, y0,         r); ctx.closePath()
             }
             ctx.stroke()
           }
+          ctx.globalAlpha = 1
           const blob  = await new Promise<Blob>(res => canvas.toBlob(b => res(b!), 'image/png'))
-          const bytes = new Uint8Array(await blob.arrayBuffer())
-          await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, bytes)
+          await ffmpeg.writeFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`, new Uint8Array(await blob.arrayBuffer()))
         }
-
-        console.log(`[export] shape ${sl.id}: wrote ${frameCount} anim frames, itsoffset=${sl.startAt.toFixed(3)}, inputIdx=${inputIdx}`)
-        inputArgs.push('-itsoffset', sl.startAt.toFixed(6), '-framerate', String(SHAPE_ANIM_FPS), '-i', `shape_${sl.id}_f%03d.png`)
-        shapeInputInfos.push({ animIdx: inputIdx++, frameCount })
+        shapeInfos.push({ frameCount })
       }
     }
 
-    // Image overlay inputs
+    // ── Image overlay files ──────────────────────────────────────────────────
     const imageOverlays = overlayLayers.filter(ol => ol.type === 'image' && ol.objectUrl)
-    const imageOverlayInputIndices: number[] = []
     for (const ol of imageOverlays) {
       const ext = ol.fileName?.split('.').pop() ?? 'png'
-      console.log(`[export] writing image overlay ol_img_${ol.id}.${ext}`)
       await ffmpeg.writeFile(`ol_img_${ol.id}.${ext}`, await fetchFile(ol.objectUrl!))
-      inputArgs.push('-loop', '1', '-i', `ol_img_${ol.id}.${ext}`)
-      imageOverlayInputIndices.push(inputIdx++)
     }
 
-    // Text overlays — rendered via canvas to avoid FFmpeg font dependency
+    // ── Text overlay PNGs ────────────────────────────────────────────────────
     const textOverlays = overlayLayers.filter(ol => ol.type === 'text')
-    const textOverlayInputIndices: number[] = []
     for (const ol of textOverlays) {
       const canvas = document.createElement('canvas')
-      canvas.width = outW
-      canvas.height = outH
+      canvas.width = outW; canvas.height = outH
       const ctx = canvas.getContext('2d')!
       ctx.clearRect(0, 0, outW, outH)
 
@@ -819,7 +733,6 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
       const cx = Math.round(outW * ol.x / 100)
       const cy = Math.round(outH * ol.y / 100)
 
-      // Parse HTML into styled runs grouped by line
       interface Run { text: string; bold: boolean; italic: boolean; relSize: number }
       function htmlToLines(html: string): Run[][] {
         const lines: Run[][] = [[]]
@@ -857,63 +770,41 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
         : rawText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/\n/g, '<br>')
       const richLines = htmlToLines(html)
 
-      // Helper: set ctx.font for a run
       function setFont(run: Run) {
         const fs = Math.round(baseFontSize * run.relSize)
-        const fw = run.bold ? 'bold' : baseFontWeight
-        const fi = run.italic ? 'italic' : 'normal'
-        ctx.font = `${fi} ${fw} ${fs}px sans-serif`
+        ctx.font = `${run.italic ? 'italic' : 'normal'} ${run.bold ? 'bold' : baseFontWeight} ${fs}px sans-serif`
       }
 
-      // Measure each line's total width
       const lineWidths = richLines.map(line =>
         line.reduce((total, run) => { setFont(run); return total + ctx.measureText(run.text).width }, 0)
       )
       const maxLineW   = Math.max(...lineWidths, 1)
       const lineHeight = Math.round(baseFontSize * 1.35)
       const totalTextH = richLines.length * lineHeight
-
-      const hasBg     = (ol.bgOpacity ?? 0) > 0
-      const borderW   = ol.borderWidth ?? 0
-      const hasBorder = borderW > 0
-      const radius    = Math.min(ol.borderRadius ?? (hasBg ? 4 : 0), 999)
+      const hasBg      = (ol.bgOpacity ?? 0) > 0
+      const borderW    = ol.borderWidth ?? 0
+      const hasBorder  = borderW > 0
+      const radius     = Math.min(ol.borderRadius ?? (hasBg ? 4 : 0), 999)
 
       if (hasBg || hasBorder) {
         const padX = Math.max(8, Math.round(baseFontSize * 0.3))
         const padY = Math.max(4, Math.round(baseFontSize * 0.15))
-        const rx = cx - maxLineW / 2 - padX
-        const ry = cy - totalTextH / 2 - padY
-        const rw = maxLineW + padX * 2
-        const rh = totalTextH + padY * 2
+        const rx = cx - maxLineW / 2 - padX; const ry = cy - totalTextH / 2 - padY
+        const rw = maxLineW + padX * 2;       const rh = totalTextH + padY * 2
         const r  = Math.min(radius, rw / 2, rh / 2)
-
         if (hasBg) {
           const hex = ol.bgColor ?? '#000000'
-          const ri = parseInt(hex.slice(1, 3), 16)
-          const gi = parseInt(hex.slice(3, 5), 16)
-          const bi = parseInt(hex.slice(5, 7), 16)
-          ctx.fillStyle = `rgba(${ri},${gi},${bi},${ol.bgOpacity})`
-          ctx.beginPath()
-          ctx.roundRect(rx, ry, rw, rh, r)
-          ctx.fill()
+          ctx.fillStyle = `rgba(${parseInt(hex.slice(1,3),16)},${parseInt(hex.slice(3,5),16)},${parseInt(hex.slice(5,7),16)},${ol.bgOpacity})`
+          ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, r); ctx.fill()
         }
-
         if (hasBorder) {
           const bHex = ol.borderColor ?? '#ffffff'
-          const ri = parseInt(bHex.slice(1, 3), 16)
-          const gi = parseInt(bHex.slice(3, 5), 16)
-          const bi = parseInt(bHex.slice(5, 7), 16)
-          ctx.strokeStyle = `rgb(${ri},${gi},${bi})`
+          ctx.strokeStyle = `rgb(${parseInt(bHex.slice(1,3),16)},${parseInt(bHex.slice(3,5),16)},${parseInt(bHex.slice(5,7),16)})`
           ctx.lineWidth = borderW
-          ctx.beginPath()
-          ctx.roundRect(rx, ry, rw, rh, r)
-          ctx.stroke()
+          ctx.beginPath(); ctx.roundRect(rx, ry, rw, rh, r); ctx.stroke()
         }
       }
-
-      // Draw each line's runs left-to-right, centered per line
-      ctx.textBaseline = 'middle'
-      ctx.textAlign = 'left'
+      ctx.textBaseline = 'middle'; ctx.textAlign = 'left'
       richLines.forEach((line, li) => {
         const lineY = cy - totalTextH / 2 + lineHeight * (li + 0.5)
         let runX = cx - lineWidths[li] / 2
@@ -924,141 +815,267 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
           runX += ctx.measureText(run.text).width
         }
       })
-
       const pngBlob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/png'))
-      const pngArr = new Uint8Array(await pngBlob.arrayBuffer())
-      const pngFile = `text_ol_${ol.id}.png`
-      await ffmpeg.writeFile(pngFile, pngArr)
-      console.log(`[export] rendered text overlay "${ol.text}" to ${pngFile} (${pngArr.length} bytes)`)
-
-      inputArgs.push('-loop', '1', '-i', pngFile)
-      textOverlayInputIndices.push(inputIdx++)
+      await ffmpeg.writeFile(`text_ol_${ol.id}.png`, new Uint8Array(await pngBlob.arrayBuffer()))
     }
 
-    // Subtitle strip height: sized to fit up to 3 lines of text at the chosen font size.
-    // line height ≈ fontSize * 1.4; fontSize = outH * 0.045 * multiplier; add padding.
-    const subFontPx = Math.round(outH * 0.045 * subtitleFontSize)
-    const subLineH  = Math.round(subFontPx * 1.4)
-    // Standard can wrap to 3 lines; highlight shows 1 line of up to 4 words.
-    const STRIP_H = subtitleStyle === 'highlight'
-      ? Math.round(subLineH * 1 + subFontPx * 0.6)   // 1 line + padding
-      : Math.round(subLineH * 3 + subFontPx * 0.6)   // 3 lines + padding
-
-    // Step 1: render all subtitle PNGs to the virtual FS (same as before)
-    for (let si = 0; si < subEvents.length; si++) {
-      const pngData = await renderSubEvent(subEvents[si], outW, outH, STRIP_H, subtitleStyle as 'standard' | 'highlight', subtitlePosition, subtitleFontSize, standardSubtitleAppearance, subtitleAppearance)
-      await ffmpeg.writeFile(`sub_${si}.png`, pngData)
+    // ── Audio layer files ────────────────────────────────────────────────────
+    const validAudioLayers = audioLayers.filter(l => !!l.objectUrl)
+    for (const layer of validAudioLayers) {
+      const ext = layer.fileName.split('.').pop() ?? 'mp3'
+      await ffmpeg.writeFile(`audio_${layer.id}.${ext}`, await fetchFile(layer.objectUrl!))
     }
-    if (subEvents.length) console.log(`[export] wrote ${subEvents.length} subtitle strip PNGs (${STRIP_H}px tall)`)
 
-    // Step 2: build a single subtitle track using the concat demuxer approach.
-    // Instead of N separate overlay filter nodes (O(N) per frame), we create ONE
-    // concatenated subtitle stream and use a SINGLE overlay — O(1) per frame.
+    // ────────────────────────────────────────────────────────────────────────
+    // Phase 1 — encode each clip individually to tmp_clip_i.mp4
+    // Only one source file lives in the virtual FS at a time, avoiding OOM.
+    // ────────────────────────────────────────────────────────────────────────
+    const sourcesInFs = new Set<string>()
+
+    for (let i = 0; i < N; i++) {
+      const timing     = timings[i]
+      const { clip }   = timing
+      const source     = sources.find(s => s.id === clip.sourceId)
+      const clipDur    = clip.trimEnd - clip.trimStart
+      const clipDurStr = clipDur.toFixed(6)
+      const speed      = clipSpeeds[clip.id] ?? 1
+      const timelineDur = timing.end - timing.start   // = clipDur / speed
+      const outFile    = `tmp_clip_${i}.mp4`
+
+      const phaseBase = (i / (N + 1)) * 0.85
+      const phaseSize = (1  / (N + 1)) * 0.85
+      const p1Handler = ({ progress }: { progress: number }) =>
+        onProgress(phaseBase + Math.max(0, Math.min(1, progress)) * phaseSize)
+      ffmpeg.on('progress', p1Handler)
+
+      try {
+        const clipInputArgs:   string[] = []
+        const clipFilterParts: string[] = []
+        let finalVideoLabel = '[trim0]'
+
+        if (clip.background) {
+          // Render background PNG inline, delete after encode
+          const bgCanvas = document.createElement('canvas')
+          bgCanvas.width = outW; bgCanvas.height = outH
+          const bgCtx = bgCanvas.getContext('2d')!
+          if (clip.background.type === 'solid') {
+            bgCtx.fillStyle = clip.background.value; bgCtx.fillRect(0, 0, outW, outH)
+          } else {
+            const m = clip.background.value.match(/linear-gradient\(\s*([^,]+),\s*(.+)\)/i)
+            if (m) {
+              const angleDeg = parseFloat(m[1]) || 180
+              const rad = (angleDeg - 90) * Math.PI / 180
+              const grd = bgCtx.createLinearGradient(
+                (0.5 - Math.cos(rad) * 0.5) * outW, (0.5 - Math.sin(rad) * 0.5) * outH,
+                (0.5 + Math.cos(rad) * 0.5) * outW, (0.5 + Math.sin(rad) * 0.5) * outH,
+              )
+              m[2].split(',').forEach((stop, idx, arr) => {
+                const parts = stop.trim().split(/\s+/)
+                grd.addColorStop(parts[1] ? parseFloat(parts[1]) / 100 : idx / Math.max(arr.length - 1, 1), parts[0])
+              })
+              bgCtx.fillStyle = grd; bgCtx.fillRect(0, 0, outW, outH)
+            } else {
+              bgCtx.fillStyle = '#000000'; bgCtx.fillRect(0, 0, outW, outH)
+            }
+          }
+          const bgBlob = await new Promise<Blob>(r => bgCanvas.toBlob(b => r(b!), 'image/png'))
+          const bgFile = `bg_${clip.id}.png`
+          await ffmpeg.writeFile(bgFile, new Uint8Array(await bgBlob.arrayBuffer()))
+          clipInputArgs.push('-loop', '1', '-framerate', '25', '-i', bgFile)
+          clipFilterParts.push(`[0:v]trim=start=0:end=${clipDurStr},setpts=PTS-STARTPTS,scale=${outW}:${outH},setsar=1,fps=30[trim0]`)
+          clipFilterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim0]`)
+        } else {
+          const srcFileName = source?.isImage ? `src_${clip.sourceId}.jpg` : `src_${clip.sourceId}.mp4`
+          if (!sourcesInFs.has(clip.sourceId)) {
+            if (source?.objectUrl) {
+              console.log(`[export] Phase 1 clip ${i}: writing ${srcFileName}`)
+              await ffmpeg.writeFile(srcFileName, await fetchFile(source.objectUrl))
+              sourcesInFs.add(clip.sourceId)
+            } else {
+              console.warn('[export] source has no objectUrl', clip.sourceId)
+            }
+          }
+
+          if (sourcesInFs.has(clip.sourceId)) {
+            if (source?.isImage) {
+              clipInputArgs.push('-loop', '1', '-framerate', '25', '-i', srcFileName)
+            } else {
+              clipInputArgs.push('-i', srcFileName)
+            }
+
+            const crop   = clipCrops[clip.id] ?? { x: 50, y: 50 }
+            const zoom   = clipZooms[clip.id] ?? 1
+            const preset = clipZoomPresets[clip.id] ?? 'none'
+            const speedVideoFilter = speed !== 1 ? `,setpts=PTS/${speed.toFixed(6)}` : ''
+            const trimFilter = `[0:v]trim=start=${clip.trimStart}:end=${clip.trimEnd},setpts=PTS-STARTPTS${speedVideoFilter}`
+
+            const colorFilter = toFfmpegColorFilter(clipColorCorrections[clip.id] ?? COLOR_CORRECTION_DEFAULT)
+            const colorSuffix = colorFilter ? `,${colorFilter}` : ''
+
+            if (preset === 'punch' || preset === 'ken-burns') {
+              // Pre-scale to cover outW×outH (centered), then animate via zoompan
+              const coverScale = `,scale=${outW}:${outH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
+              const zpFilter = buildZoomPanFilter(preset, zoom, crop, timelineDur, outW, outH, clipTransitionDurations[clip.id] ?? 0.5)
+              clipFilterParts.push(`${trimFilter}${coverScale},${zpFilter}${colorSuffix},fps=30[trim0]`)
+            } else {
+              let scaleAndCrop: string
+              if (outputFormat || zoom !== 1) {
+                const zoomedW = Math.ceil(outW * zoom); const zoomedH = Math.ceil(outH * zoom)
+                const evenZW  = zoomedW % 2 === 0 ? zoomedW : zoomedW + 1
+                const evenZH  = zoomedH % 2 === 0 ? zoomedH : zoomedH + 1
+                const cropX   = `(${evenZW}-${outW})*${(crop.x / 100).toFixed(4)}`
+                const cropY   = `(${evenZH}-${outH})*${(crop.y / 100).toFixed(4)}`
+                scaleAndCrop  = `,scale=${evenZW}:${evenZH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}:${cropX}:${cropY},setsar=1`
+              } else {
+                scaleAndCrop = `,scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
+              }
+              clipFilterParts.push(`${trimFilter}${scaleAndCrop}${colorFilter ? ',' + colorFilter : ''},fps=30[trim0]`)
+            }
+
+            const tIn  = clipTransitionIn[clip.id]  ?? 'none'
+            const tOut = clipTransitionOut[clip.id] ?? 'none'
+            finalVideoLabel = applyClipTransitions(0, clipDur, tIn, tOut, clipTransitionDurations[clip.id] ?? 0.5, outW, outH, clipFilterParts)
+
+            if (!sourceAudioMap.get(clip.sourceId)) {
+              clipFilterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim0]`)
+            } else {
+              const atempoChain = buildAtempoChain(speed)
+              clipFilterParts.push(`[0:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS${atempoChain}[atrim0]`)
+            }
+          } else {
+            // Source missing — substitute a black frame
+            clipInputArgs.push('-f', 'lavfi', '-i', `color=c=black:size=${outW}x${outH}:r=30`)
+            clipFilterParts.push(`[0:v]trim=end=${clipDurStr},setpts=PTS-STARTPTS,setsar=1,fps=30[trim0]`)
+            clipFilterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim0]`)
+          }
+        }
+
+        const clipArgs = [
+          ...clipInputArgs,
+          '-filter_complex', clipFilterParts.join(';'),
+          '-map', finalVideoLabel,
+          '-map', '[atrim0]',
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p',
+          '-c:a', 'aac', '-b:a', '128k',
+          '-t', timelineDur.toFixed(6),
+          outFile,
+        ]
+        console.log(`[export] Phase 1 clip ${i}/${N}: filter=${clipFilterParts.join(';')}`)
+        let p1ExitCode = await ffmpeg.exec(clipArgs)
+
+        // If failed and a [0:a] filter was used, the source may have no audio stream
+        // (detectAudioTrack can false-positive). Retry substituting silence.
+        if (p1ExitCode !== 0 && clipFilterParts.some(f => f.startsWith('[0:a]'))) {
+          console.warn(`[export] Phase 1 clip ${i}: no audio stream detected, retrying with silence`)
+          sourceAudioMap.set(clip.sourceId, false)
+          const silentFilterParts = clipFilterParts.map(f =>
+            f.startsWith('[0:a]')
+              ? `anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim0]`
+              : f
+          )
+          const retryArgs = [
+            ...clipInputArgs,
+            '-filter_complex', silentFilterParts.join(';'),
+            '-map', finalVideoLabel,
+            '-map', '[atrim0]',
+            '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '18', '-pix_fmt', 'yuv420p',
+            '-c:a', 'aac', '-b:a', '128k',
+            '-t', timelineDur.toFixed(6),
+            outFile,
+          ]
+          p1ExitCode = await ffmpeg.exec(retryArgs)
+        }
+
+        if (p1ExitCode !== 0) throw new Error(`FFmpeg Phase 1 clip ${i} exited with code ${p1ExitCode}`)
+
+        // Delete background PNG right after encode
+        if (clip.background) await ffmpeg.deleteFile(`bg_${clip.id}.png`).catch(() => {})
+
+        // Delete source file when no later clip needs it
+        if (!clip.background && sourcesInFs.has(clip.sourceId)) {
+          const stillNeeded = timings.slice(i + 1).some(t => t.clip.sourceId === clip.sourceId)
+          if (!stillNeeded) {
+            await ffmpeg.deleteFile(source?.isImage ? `src_${clip.sourceId}.jpg` : `src_${clip.sourceId}.mp4`).catch(() => {})
+            sourcesInFs.delete(clip.sourceId)
+          }
+        }
+      } finally {
+        ffmpeg.off('progress', p1Handler)
+      }
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Phase 2 — concat pre-encoded clips + global filters + final encode
+    // ────────────────────────────────────────────────────────────────────────
+    const p2InputArgs:   string[] = []
+    const p2FilterParts: string[] = []
+    let p2InputIdx = 0
+
+    // Clip inputs
+    for (let i = 0; i < N; i++) p2InputArgs.push('-i', `tmp_clip_${i}.mp4`)
+    p2InputIdx = N
+
+    // Concat
+    const vInputs = Array.from({ length: N }, (_, i) => `[${i}:v]`).join('')
+    const aInputs = Array.from({ length: N }, (_, i) => `[${i}:a]`).join('')
+    p2FilterParts.push(`${vInputs}concat=n=${N}:v=1:a=0[concatv]`)
+    p2FilterParts.push(`${aInputs}concat=n=${N}:v=0:a=1[concata]`)
+
+    // Audio layer inputs
+    const audioLayerInputIndices: number[] = []
+    for (const layer of validAudioLayers) {
+      const ext = layer.fileName.split('.').pop() ?? 'mp3'
+      p2InputArgs.push('-i', `audio_${layer.id}.${ext}`)
+      audioLayerInputIndices.push(p2InputIdx++)
+    }
+
+    // Shape layer inputs
+    const shapeInputInfosP2: { animIdx: number; frameCount: number; looping?: boolean }[] = []
+    for (let si = 0; si < shapeLayers.length; si++) {
+      const sl = shapeLayers[si]
+      const { frameCount, looping } = shapeInfos[si]
+      p2InputArgs.push('-itsoffset', sl.startAt.toFixed(6), '-framerate', String(SHAPE_ANIM_FPS), '-i', `shape_${sl.id}_f%03d.png`)
+      shapeInputInfosP2.push({ animIdx: p2InputIdx++, frameCount, looping })
+    }
+
+    // Image overlay inputs
+    const imageOverlayInputIndices: number[] = []
+    for (const ol of imageOverlays) {
+      const ext = ol.fileName?.split('.').pop() ?? 'png'
+      p2InputArgs.push('-loop', '1', '-i', `ol_img_${ol.id}.${ext}`)
+      imageOverlayInputIndices.push(p2InputIdx++)
+    }
+
+    // Text overlay inputs
+    const textOverlayInputIndices: number[] = []
+    for (const ol of textOverlays) {
+      p2InputArgs.push('-loop', '1', '-i', `text_ol_${ol.id}.png`)
+      textOverlayInputIndices.push(p2InputIdx++)
+    }
+
+    // Subtitle track inputs
     const subConcatLabels: string[] = []
     if (subEvents.length > 0) {
-      // Transparent blank frame used during gaps between subtitle events
-      const blankCanvas = document.createElement('canvas')
-      blankCanvas.width = outW
-      blankCanvas.height = STRIP_H
-      const blankBlob = await new Promise<Blob>(resolve => blankCanvas.toBlob(b => resolve(b!), 'image/png'))
-      await ffmpeg.writeFile('sub_blank.png', new Uint8Array(await blankBlob.arrayBuffer()))
-
       let prevEnd = 0
       for (let si = 0; si < subEvents.length; si++) {
         const ev = subEvents[si]
-        // Gap before this event (if any)
         const gapDur = ev.startAt - prevEnd
         if (gapDur > 0.001) {
-          inputArgs.push('-t', gapDur.toFixed(3), '-loop', '1', '-i', 'sub_blank.png')
-          subConcatLabels.push(`[${inputIdx++}:v]`)
+          p2InputArgs.push('-t', gapDur.toFixed(3), '-loop', '1', '-i', 'sub_blank.png')
+          subConcatLabels.push(`[${p2InputIdx++}:v]`)
         }
-        // This subtitle event
-        inputArgs.push('-t', (ev.endAt - ev.startAt).toFixed(3), '-loop', '1', '-i', `sub_${si}.png`)
-        subConcatLabels.push(`[${inputIdx++}:v]`)
+        p2InputArgs.push('-t', (ev.endAt - ev.startAt).toFixed(3), '-loop', '1', '-i', `sub_${si}.png`)
+        subConcatLabels.push(`[${p2InputIdx++}:v]`)
         prevEnd = ev.endAt
       }
-      // Gap after the last event
       const tailGap = totalDuration - prevEnd
       if (tailGap > 0.001) {
-        inputArgs.push('-t', tailGap.toFixed(3), '-loop', '1', '-i', 'sub_blank.png')
-        subConcatLabels.push(`[${inputIdx++}:v]`)
+        p2InputArgs.push('-t', tailGap.toFixed(3), '-loop', '1', '-i', 'sub_blank.png')
+        subConcatLabels.push(`[${p2InputIdx++}:v]`)
       }
     }
 
-    const finalVideoLabels: string[] = []
-
-    for (let i = 0; i < timings.length; i++) {
-      const timing = timings[i]
-      const { clip } = timing
-      const source = sources.find(s => s.id === clip.sourceId)
-      const clipDur = clip.trimEnd - clip.trimStart
-      const clipDurStr = clipDur.toFixed(6)
-      const speed = clipSpeeds[clip.id] ?? 1
-      const trimLabel = `[trim${i}]`
-
-      if (clip.background) {
-        // Background clip — use pre-rendered PNG input, no audio stream
-        const bgIdx = bgClipInputIndices.get(clip.id)!
-        filterParts.push(`[${bgIdx}:v]trim=start=0:end=${clipDurStr},setpts=PTS-STARTPTS,scale=${outW}:${outH},setsar=1,fps=30${trimLabel}`)
-        filterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim${i}]`)
-        finalVideoLabels.push(trimLabel)
-        continue
-      }
-
-      const srcIdx = sourceIndexMap.get(clip.sourceId)
-      if (srcIdx === undefined) {
-        // Source wasn't written (missing objectUrl) — substitute a black frame so the
-        // filter graph doesn't contain the literal string "[undefined:v]" which breaks everything
-        console.warn('[export] no source for clip, substituting black frame', clip.id, clip.sourceId)
-        filterParts.push(`color=c=black:size=${outW}x${outH}:rate=30:duration=${clipDurStr},setpts=PTS-STARTPTS,setsar=1${trimLabel}`)
-        filterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim${i}]`)
-        finalVideoLabels.push(trimLabel)
-        continue
-      }
-
-      const crop = clipCrops[clip.id] ?? { x: 50, y: 50 }
-      const zoom = clipZooms[clip.id] ?? 1
-      const speedVideoFilter = speed !== 1 ? `,setpts=PTS/${speed.toFixed(6)}` : ''
-      const trimFilter = `[${srcIdx}:v]trim=start=${clip.trimStart}:end=${clip.trimEnd},setpts=PTS-STARTPTS${speedVideoFilter}`
-
-      let scaleAndCrop = ''
-      if (outputFormat || zoom !== 1) {
-        const zoomedW = Math.ceil(outW * zoom)
-        const zoomedH = Math.ceil(outH * zoom)
-        const evenZW = zoomedW % 2 === 0 ? zoomedW : zoomedW + 1
-        const evenZH = zoomedH % 2 === 0 ? zoomedH : zoomedH + 1
-        const cropX = `(${evenZW}-${outW})*${(crop.x / 100).toFixed(4)}`
-        const cropY = `(${evenZH}-${outH})*${(crop.y / 100).toFixed(4)}`
-        scaleAndCrop = `,scale=${evenZW}:${evenZH}:force_original_aspect_ratio=increase,crop=${outW}:${outH}:${cropX}:${cropY},setsar=1`
-      } else {
-        scaleAndCrop = `,scale=${outW}:${outH}:force_original_aspect_ratio=decrease,pad=${outW}:${outH}:(ow-iw)/2:(oh-ih)/2,setsar=1`
-      }
-
-      const colorFilter = toFfmpegColorFilter(clipColorCorrections[clip.id] ?? COLOR_CORRECTION_DEFAULT)
-      console.log(`[export] clip ${clip.id} colorFilter: "${colorFilter || '(none)'}"`)
-      filterParts.push(`${trimFilter}${scaleAndCrop}${colorFilter ? ',' + colorFilter : ''},fps=30${trimLabel}`)
-
-      const tIn  = clipTransitionIn[clip.id]  ?? 'none'
-      const tOut = clipTransitionOut[clip.id] ?? 'none'
-      const finalLabel = applyClipTransitions(i, clipDur, tIn, tOut, clipTransitionDurations[clip.id] ?? 0.5, outW, outH, filterParts)
-      finalVideoLabels.push(finalLabel)
-
-      // Use silence for image sources and for video sources that have no audio track
-      if (!sourceAudioMap.get(clip.sourceId)) {
-        filterParts.push(`anullsrc=r=48000:cl=stereo:d=${clipDurStr},asetpts=PTS-STARTPTS[atrim${i}]`)
-      } else {
-        const atempoChain = buildAtempoChain(speed)
-        filterParts.push(`[${srcIdx}:a]atrim=start=${clip.trimStart}:end=${clip.trimEnd},asetpts=PTS-STARTPTS${atempoChain}[atrim${i}]`)
-      }
-    }
-
-    const videoInputs = finalVideoLabels.join('')
-    const audioInputs = timings.map((_, i) => `[atrim${i}]`).join('')
-    filterParts.push(`${videoInputs}concat=n=${timings.length}:v=1:a=0[concatv]`)
-    filterParts.push(`${audioInputs}concat=n=${timings.length}:v=0:a=1[concata]`)
-
-    // Mix extra audio layers into the video audio
-    const validAudioLayers = audioLayers.filter(l => !!l.objectUrl)
+    // Audio layer mixing
     if (validAudioLayers.length > 0) {
       validAudioLayers.forEach((layer, i) => {
         const srcIdx  = audioLayerInputIndices[i]
@@ -1067,136 +1084,128 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
         const fadeIn  = layer.fadeIn  ?? 0
         const fadeOut = layer.fadeOut ?? 0
         const fadeFilters = [
-          fadeIn  > 0 ? `,afade=t=in:st=0:d=${fadeIn.toFixed(3)}`                          : '',
+          fadeIn  > 0 ? `,afade=t=in:st=0:d=${fadeIn.toFixed(3)}`                                              : '',
           fadeOut > 0 ? `,afade=t=out:st=${Math.max(0, trimDur - fadeOut).toFixed(3)}:d=${fadeOut.toFixed(3)}` : '',
         ].join('')
-        filterParts.push(
+        p2FilterParts.push(
           `[${srcIdx}:a]atrim=start=${layer.trimStart}:end=${layer.trimEnd},asetpts=PTS-STARTPTS${fadeFilters},adelay=${delayMs}:all=1,volume=${(layer.volume ?? 1).toFixed(3)}[al${i}]`
         )
       })
       const mixInputs = '[concata]' + validAudioLayers.map((_, i) => `[al${i}]`).join('')
-      filterParts.push(`${mixInputs}amix=inputs=${validAudioLayers.length + 1}:duration=first:normalize=0[finala]`)
+      p2FilterParts.push(`${mixInputs}amix=inputs=${validAudioLayers.length + 1}:duration=first:normalize=0[finala]`)
     }
 
-    // Chain overlays: thread a current video label through subtitles → image overlays → text overlays
+    // Chain overlays: subtitles → shapes → image overlays → text overlays → hide layers
     let currentV = '[concatv]'
 
-    // Subtitle overlay — one concat filter creates the subtitle track, then ONE overlay
-    // composites it onto the video. Replaces the old O(N) chain of N separate overlay nodes.
     if (subConcatLabels.length > 0) {
-      filterParts.push(`${subConcatLabels.join('')}concat=n=${subConcatLabels.length}:v=1:a=0[subtitle_track]`)
+      p2FilterParts.push(`${subConcatLabels.join('')}concat=n=${subConcatLabels.length}:v=1:a=0[subtitle_track]`)
       const stripY = subtitlePosition === 'top' ? 0
         : (subtitlePosition === 'left' || subtitlePosition === 'right') ? Math.round((outH - STRIP_H) / 2)
         : outH - STRIP_H
-      filterParts.push(`${currentV}[subtitle_track]overlay=format=auto:x=0:y=${stripY}[sub_composed]`)
+      p2FilterParts.push(`${currentV}[subtitle_track]overlay=format=auto:x=0:y=${stripY}[sub_composed]`)
       currentV = '[sub_composed]'
     }
 
-    // Shape overlays
     shapeLayers.forEach((sl, i) => {
-      const { animIdx, frameCount, looping } = shapeInputInfos[i]
-      const t0       = sl.startAt.toFixed(3)
-      const t1       = (sl.startAt + sl.duration).toFixed(3)
+      const { animIdx, frameCount, looping } = shapeInputInfosP2[i]
+      const t0 = sl.startAt.toFixed(3); const t1 = (sl.startAt + sl.duration).toFixed(3)
       const outLabel = `[sh${i}]`
       if (looping) {
-        // Ripple: loop the one-cycle sequence for the full shape duration
         const loopLabel = `[sh${i}_loop]`
-        filterParts.push(`[${animIdx}:v]loop=loop=-1:size=${frameCount}:start=0${loopLabel}`)
-        filterParts.push(`${currentV}${loopLabel}overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
+        p2FilterParts.push(`[${animIdx}:v]loop=loop=-1:size=${frameCount}:start=0${loopLabel}`)
+        p2FilterParts.push(`${currentV}${loopLabel}overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
       } else {
-        // Rectangle: eof_action=repeat holds the fully-drawn last frame
-        filterParts.push(`${currentV}[${animIdx}:v]overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
+        p2FilterParts.push(`${currentV}[${animIdx}:v]overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
       }
       currentV = outLabel
     })
 
-    // Image overlays
     imageOverlays.forEach((ol, i) => {
-      const imgIdx = imageOverlayInputIndices[i]
+      const imgIdx  = imageOverlayInputIndices[i]
       const scaledW = Math.round(outW * ol.width / 100)
-      const scaledLabel = `[ol_scaled_${i}]`
-      const outLabel = `[ov${i}]`
-      // x/y are the CENTER of the image (matching preview's translate(-50%,-50%))
-      // FFmpeg overlay uses top-left, so subtract half the scaled dimensions
-      filterParts.push(`[${imgIdx}:v]scale=${scaledW}:-1${scaledLabel}`)
-      const cx = Math.round(outW * ol.x / 100)
-      const cy = Math.round(outH * ol.y / 100)
-      const t0 = ol.startAt.toFixed(3)
-      const t1 = (ol.startAt + ol.duration).toFixed(3)
-      // Use FFmpeg expressions to offset by half the scaled image size
-      filterParts.push(`${currentV}${scaledLabel}overlay=x=${cx}-overlay_w/2:y=${cy}-overlay_h/2:enable='between(t,${t0},${t1})'${outLabel}`)
+      const scaledLabel = `[ol_scaled_${i}]`; const outLabel = `[ov${i}]`
+      p2FilterParts.push(`[${imgIdx}:v]scale=${scaledW}:-1${scaledLabel}`)
+      const cx = Math.round(outW * ol.x / 100); const cy = Math.round(outH * ol.y / 100)
+      const t0 = ol.startAt.toFixed(3);          const t1 = (ol.startAt + ol.duration).toFixed(3)
+      p2FilterParts.push(`${currentV}${scaledLabel}overlay=x=${cx}-overlay_w/2:y=${cy}-overlay_h/2:enable='between(t,${t0},${t1})'${outLabel}`)
       currentV = outLabel
     })
 
-    // Text overlays (canvas-rendered full-frame PNGs, no FFmpeg font dependency)
     textOverlays.forEach((ol, i) => {
-      const imgIdx = textOverlayInputIndices[i]
-      const outLabel = `[dt${i}]`
-      const t0 = ol.startAt.toFixed(3)
-      const t1 = (ol.startAt + ol.duration).toFixed(3)
-      // Full-frame transparent PNG; format=auto preserves alpha blending
-      filterParts.push(`${currentV}[${imgIdx}:v]overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
+      const imgIdx = textOverlayInputIndices[i]; const outLabel = `[dt${i}]`
+      const t0 = ol.startAt.toFixed(3);           const t1 = (ol.startAt + ol.duration).toFixed(3)
+      p2FilterParts.push(`${currentV}[${imgIdx}:v]overlay=format=auto:x=0:y=0:enable='between(t,${t0},${t1})'${outLabel}`)
       currentV = outLabel
     })
 
-    const filterGraph = filterParts.join(';')
-    const finalVideo = currentV
-    const finalAudio = validAudioLayers.length > 0 ? '[finala]' : '[concata]'
+    hideLayers.forEach((hl, i) => {
+      const t0 = hl.startAt.toFixed(3); const t1 = (hl.startAt + hl.duration).toFixed(3)
+      const en = `enable='between(t,${t0},${t1})'`
+      const px = Math.round(outW * hl.x / 100); const py = Math.round(outH * hl.y / 100)
+      const pw = Math.max(1, Math.round(outW * hl.w / 100)); const ph = Math.max(1, Math.round(outH * hl.h / 100))
+      const outLabel = `[hd${i}]`
+      if (hl.style === 'black') {
+        p2FilterParts.push(`${currentV}drawbox=x=${px}:y=${py}:w=${pw}:h=${ph}:color=black:t=fill:${en}${outLabel}`)
+      } else {
+        p2FilterParts.push(`${currentV}split[hd${i}_base][hd${i}_split]`)
+        p2FilterParts.push(`[hd${i}_split]crop=${pw}:${ph}:${px}:${py}[hd${i}_crop]`)
+        p2FilterParts.push(`[hd${i}_crop]gblur=sigma=20[hd${i}_blurred]`)
+        p2FilterParts.push(`[hd${i}_base][hd${i}_blurred]overlay=x=${px}:y=${py}:${en}${outLabel}`)
+      }
+      currentV = outLabel
+    })
 
-    const args = [
-      ...inputArgs,
-      '-filter_complex', filterGraph,
-      '-map', finalVideo,
-      '-map', finalAudio,
-      '-c:v', 'libx264',
-      '-preset', 'ultrafast',
-      '-crf', '23',
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-movflags', '+faststart',
-      '-t', String(totalDuration),
-      'output.mp4',
-    ]
+    const filterGraph = p2FilterParts.join(';')
+    const finalVideo  = currentV
+    const finalAudio  = validAudioLayers.length > 0 ? '[finala]' : '[concata]'
 
-    console.log('[export] filter_complex:', filterGraph)
-    console.log('[export] full args:', args.join(' '))
+    console.log('[export] Phase 2 filter_complex:', filterGraph)
 
-    const exitCode = await ffmpeg.exec(args)
-    console.log('[export] ffmpeg exit code:', exitCode)
-    if (exitCode !== 0) {
-      throw new Error(`FFmpeg exited with code ${exitCode}. Check the console for filter_complex and args.`)
+    const p2Handler = ({ progress }: { progress: number }) =>
+      onProgress(0.85 + Math.max(0, Math.min(1, progress)) * 0.15)
+    ffmpeg.on('progress', p2Handler)
+
+    let p2ExitCode: number
+    try {
+      const p2Args = [
+        ...p2InputArgs,
+        '-filter_complex', filterGraph,
+        '-map', finalVideo,
+        '-map', finalAudio,
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-crf', '23', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k',
+        '-movflags', '+faststart',
+        '-t', String(totalDuration),
+        'output.mp4',
+      ]
+      console.log('[export] Phase 2 args:', p2Args.join(' '))
+      p2ExitCode = await ffmpeg.exec(p2Args)
+    } finally {
+      ffmpeg.off('progress', p2Handler)
+    }
+
+    if (p2ExitCode !== 0) {
+      throw new Error(`FFmpeg Phase 2 exited with code ${p2ExitCode}. Check the console for filter_complex and args.`)
     }
 
     const data = await ffmpeg.readFile('output.mp4')
 
-    // Cleanup virtual FS
-    for (const sourceId of writtenSources) {
-      await ffmpeg.deleteFile(`src_${sourceId}.mp4`).catch(() => {})
-    }
-    for (let si = 0; si < subEvents.length; si++) {
-      await ffmpeg.deleteFile(`sub_${si}.png`).catch(() => {})
-    }
-    await ffmpeg.deleteFile('sub_blank.png').catch(() => {})
+    // ── Cleanup ──────────────────────────────────────────────────────────────
+    for (let i = 0; i < N; i++) await ffmpeg.deleteFile(`tmp_clip_${i}.mp4`).catch(() => {})
+    for (let si = 0; si < subEvents.length; si++) await ffmpeg.deleteFile(`sub_${si}.png`).catch(() => {})
+    if (subEvents.length > 0) await ffmpeg.deleteFile('sub_blank.png').catch(() => {})
     for (const layer of validAudioLayers) {
-      const ext = layer.fileName.split('.').pop() ?? 'mp3'
-      await ffmpeg.deleteFile(`audio_${layer.id}.${ext}`).catch(() => {})
+      await ffmpeg.deleteFile(`audio_${layer.id}.${layer.fileName.split('.').pop() ?? 'mp3'}`).catch(() => {})
     }
     for (const ol of imageOverlays) {
-      const ext = ol.fileName?.split('.').pop() ?? 'png'
-      await ffmpeg.deleteFile(`ol_img_${ol.id}.${ext}`).catch(() => {})
+      await ffmpeg.deleteFile(`ol_img_${ol.id}.${ol.fileName?.split('.').pop() ?? 'png'}`).catch(() => {})
     }
-    for (const ol of textOverlays) {
-      await ffmpeg.deleteFile(`text_ol_${ol.id}.png`).catch(() => {})
-    }
-    for (const clip of clips) {
-      if (clip.background) await ffmpeg.deleteFile(`bg_${clip.id}.png`).catch(() => {})
-    }
+    for (const ol of textOverlays) await ffmpeg.deleteFile(`text_ol_${ol.id}.png`).catch(() => {})
     for (let i = 0; i < shapeLayers.length; i++) {
-      const sl = shapeLayers[i]
-      const { frameCount } = shapeInputInfos[i]
-      for (let n = 0; n < frameCount; n++) {
+      const sl = shapeLayers[i]; const { frameCount } = shapeInfos[i]
+      for (let n = 0; n < frameCount; n++)
         await ffmpeg.deleteFile(`shape_${sl.id}_f${String(n).padStart(3, '0')}.png`).catch(() => {})
-      }
     }
     await ffmpeg.deleteFile('output.mp4').catch(() => {})
 
@@ -1205,10 +1214,9 @@ export async function exportVideo(opts: ExportOptions): Promise<Blob> {
     plain.set(raw)
     return new Blob([plain.buffer], { type: 'video/mp4' })
   } catch (err) {
-    resetFFmpeg() // force fresh instance on next attempt
+    resetFFmpeg()
     throw err
   } finally {
-    ffmpeg.off('progress', progressHandler)
     ffmpeg.off('log', logHandler)
   }
 }

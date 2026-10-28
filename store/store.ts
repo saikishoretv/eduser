@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { Clip, ClipBackground, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, Step, CcSegment, ShapeLayer } from '@/types'
+import { Clip, ClipBackground, Project, SourceVideo, TranscriptSegment, AudioLayer, OverlayLayer, Step, CcSegment, ShapeLayer, HideLayer } from '@/types'
 import { getClipTimings, getTotalDuration, canMerge, getSelectedIndices } from '@/lib/clipUtils'
 import { FormatPreset } from '@/lib/formats'
 import { SubtitleAppearance, SUBTITLE_DEFAULT, StandardSubtitleAppearance, STANDARD_SUBTITLE_DEFAULT } from '@/lib/subtitleTemplates'
@@ -117,6 +117,13 @@ interface EditorStore {
   addShapeLayer: (layer: ShapeLayer) => void
   removeShapeLayer: (id: string) => void
   updateShapeLayer: (id: string, patch: Partial<Omit<ShapeLayer, 'id' | 'type'>>) => void
+
+  selectedHideLayerId: string | null
+  setSelectedHideLayerId: (id: string | null) => void
+  addHideLayer: (layer: HideLayer) => void
+  removeHideLayer: (id: string) => void
+  updateHideLayer: (id: string, patch: Partial<Omit<HideLayer, 'id' | 'style'>>) => void
+
   applyPauseCuts: (clips: Clip[]) => void
 
   setSubtitleStyle: (style: SubtitleStyle) => void
@@ -156,7 +163,7 @@ interface EditorStore {
   pendingFreezeFrame: boolean
   requestFreezeFrame: () => void
   cancelFreezeFrame: () => void
-  executeFreezeFrame: (sourceId: string, objectUrl: string, width: number, height: number) => void
+  executeFreezeFrame: (sourceId: string, objectUrl: string, width: number, height: number, s3Key?: string) => void
 
   pushUndo: () => void
   undo: () => void
@@ -253,6 +260,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       selectedAudioLayerId: null,
       selectedOverlayId: null,
       selectedShapeId: null,
+      selectedHideLayerId: null,
       audioLayerClipboard: null,
       overlayClipboard: null,
       clipboard: [],
@@ -321,7 +329,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
           id: data.id, name: data.name, createdAt: data.createdAt,
           clips: data.clips, sources: data.sources,
           audioLayers: (data.audioLayers ?? []).map(l => ({ ...l, trackIndex: l.trackIndex ?? 0 })), overlayLayers: data.overlayLayers,
-          steps: data.steps, ccSegments: data.ccSegments, shapeLayers: data.shapeLayers ?? [],
+          steps: data.steps, ccSegments: data.ccSegments, shapeLayers: data.shapeLayers ?? [], hideLayers: data.hideLayers ?? [],
         }
         return {
           projects: s.projects.some(p => p.id === project.id)
@@ -486,7 +494,7 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
       }),
 
       setActiveProject: (id) => {
-        set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, selectedShapeId: null, playheadTime: 0, isPlaying: false })
+        set({ activeProjectId: id, selectedClipIds: [], selectedAudioLayerId: null, selectedOverlayId: null, selectedShapeId: null, selectedHideLayerId: null, playheadTime: 0, isPlaying: false })
       },
 
       setSourceObjectUrl: (sourceId, objectUrl) => set(s => ({
@@ -703,6 +711,33 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
         projects: s.projects.map(p =>
           p.id === s.activeProjectId
             ? { ...p, shapeLayers: (p.shapeLayers ?? []).map(sl => sl.id === id ? { ...sl, ...patch } : sl) }
+            : p
+        ),
+      })),
+
+      setSelectedHideLayerId: (id) => set({ selectedHideLayerId: id }),
+      addHideLayer: (layer) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === s.activeProjectId
+            ? { ...p, hideLayers: [...(p.hideLayers ?? []), layer] }
+            : p
+        ),
+        selectedHideLayerId: layer.id,
+        ...withUndo(s),
+      })),
+      removeHideLayer: (id) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === s.activeProjectId
+            ? { ...p, hideLayers: (p.hideLayers ?? []).filter(hl => hl.id !== id) }
+            : p
+        ),
+        selectedHideLayerId: s.selectedHideLayerId === id ? null : s.selectedHideLayerId,
+        ...withUndo(s),
+      })),
+      updateHideLayer: (id, patch) => set(s => ({
+        projects: s.projects.map(p =>
+          p.id === s.activeProjectId
+            ? { ...p, hideLayers: (p.hideLayers ?? []).map(hl => hl.id === id ? { ...hl, ...patch } : hl) }
             : p
         ),
       })),
@@ -1130,12 +1165,13 @@ export const useEditorStore = create<EditorStore>()((set, get) => ({
 
       requestFreezeFrame: () => set({ pendingFreezeFrame: true }),
       cancelFreezeFrame: () => set({ pendingFreezeFrame: false }),
-      executeFreezeFrame: (sourceId, objectUrl, width, height) => set(s => {
+      executeFreezeFrame: (sourceId, objectUrl, width, height, s3Key) => set(s => {
         const project = activeProject(s)
         if (!project) return { pendingFreezeFrame: false }
 
         const source: import('@/types').SourceVideo = {
           id: sourceId, name: 'Freeze Frame', duration: 4, width, height, objectUrl, isImage: true,
+          ...(s3Key ? { s3Key } : {}),
         }
         const freezeClip: Clip = { id: uid(), sourceId, name: 'Freeze Frame', trimStart: 0, trimEnd: 4 }
 

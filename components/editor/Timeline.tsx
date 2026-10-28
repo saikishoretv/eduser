@@ -3,12 +3,13 @@
 import { useRef, useCallback, useState, useEffect } from 'react'
 import { useEditorStore } from '@/store/store'
 import { getClipTimings, formatTime } from '@/lib/clipUtils'
-import { AudioLayer, Step, ShapeLayer } from '@/types'
+import { AudioLayer, HideLayer, Step, ShapeLayer } from '@/types'
 import TimeRuler from './TimeRuler'
 import ClipItem from './ClipItem'
 import AudioLayerItem from './AudioLayerItem'
 import OverlayItem from './OverlayItem'
 import ShapeItem from './ShapeItem'
+import HideLayerItem from './HideLayerItem'
 import BackgroundClipPicker from './BackgroundClipPicker'
 import ClipReorderOverlay from './ClipReorderOverlay'
 
@@ -18,6 +19,7 @@ const EMPTY_AUDIO_LAYERS: AudioLayer[] = []
 const EMPTY_OVERLAY_LAYERS: import('@/types').OverlayLayer[] = []
 const EMPTY_STEPS: Step[] = []
 const EMPTY_SHAPE_LAYERS: ShapeLayer[] = []
+const EMPTY_HIDE_LAYERS: HideLayer[] = []
 
 // Must match COLORS in ClipItem and STEP_ACCENTS in AudioLayerItem
 const STEP_BG_COLORS = [
@@ -68,9 +70,13 @@ export default function Timeline() {
   const overlayLayers = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.overlayLayers ?? EMPTY_OVERLAY_LAYERS)
   const steps         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.steps ?? EMPTY_STEPS)
   const shapeLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_SHAPE_LAYERS)
+  const hideLayers    = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.hideLayers ?? EMPTY_HIDE_LAYERS)
   const selectedShapeId    = useEditorStore(s => s.selectedShapeId)
   const setSelectedShapeId = useEditorStore(s => s.setSelectedShapeId)
   const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
+  const selectedHideLayerId    = useEditorStore(s => s.selectedHideLayerId)
+  const setSelectedHideLayerId = useEditorStore(s => s.setSelectedHideLayerId)
+  const updateHideLayer        = useEditorStore(s => s.updateHideLayer)
   const updateStep    = useEditorStore(s => s.updateStep)
   const moveStep      = useEditorStore(s => s.moveStep)
   const addStep       = useEditorStore(s => s.addStep)
@@ -191,7 +197,9 @@ export default function Timeline() {
   const CLIPS_H       = 52
   const SHAPES_ROW_H  = 32
   const SHAPES_START  = CLIPS_TOP + CLIPS_H + 8
-  const AUDIO_START   = SHAPES_START + SHAPES_ROW_H + 8
+  const HIDE_ROW_H    = 32
+  const HIDE_START    = SHAPES_START + SHAPES_ROW_H + 8
+  const AUDIO_START   = HIDE_START + HIDE_ROW_H + 8
   const AUDIO_ROW_H   = 36
   const AUDIO_ROW_GAP = 4
 
@@ -696,6 +704,11 @@ export default function Timeline() {
               <span className="text-[9px] text-neutral-600 uppercase tracking-wider">Shps</span>
             </div>
           </div>
+          <div className="absolute left-0 pointer-events-none" style={{ top: HIDE_START, height: HIDE_ROW_H, width: 40 }}>
+            <div className="flex items-center h-full px-1">
+              <span className="text-[9px] text-neutral-600 uppercase tracking-wider">Hide</span>
+            </div>
+          </div>
           {Array.from({ length: numTracks }, (_, trackIdx) => (
             <div key={trackIdx} className="absolute left-0 pointer-events-none" style={{ top: getLayerTop(trackIdx), height: AUDIO_ROW_H, width: 40 }}>
               <div className="flex items-center h-full px-1">
@@ -759,6 +772,31 @@ export default function Timeline() {
                 selected={selectedShapeId === shape.id}
                 onSelect={() => setSelectedShapeId(selectedShapeId === shape.id ? null : shape.id)}
                 onUpdate={patch => updateShapeLayer(shape.id, patch)}
+              />
+            ))}
+          </div>
+
+          {/* Hide row */}
+          <div
+            className="absolute left-0 right-0 rounded"
+            style={{ top: HIDE_START, height: HIDE_ROW_H, background: 'rgba(255,255,255,0.02)' }}
+            onClick={e => { e.stopPropagation(); setSelectedHideLayerId(null) }}
+          >
+            {hideLayers.length === 0 && (
+              <div className="flex items-center h-full px-2 pointer-events-none">
+                <span className="text-[10px] text-neutral-700">No hide regions · click "Add Hide Region" in the toolbar</span>
+              </div>
+            )}
+            {hideLayers.map(hl => (
+              <HideLayerItem
+                key={hl.id}
+                layer={hl}
+                zoom={zoom}
+                rowTop={0}
+                rowH={HIDE_ROW_H}
+                selected={selectedHideLayerId === hl.id}
+                onSelect={() => setSelectedHideLayerId(selectedHideLayerId === hl.id ? null : hl.id)}
+                onUpdate={patch => updateHideLayer(hl.id, patch)}
               />
             ))}
           </div>

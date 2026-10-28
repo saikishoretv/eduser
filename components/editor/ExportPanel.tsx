@@ -19,6 +19,7 @@ export default function ExportPanel({ onClose }: Props) {
 
   const clipCrops               = useEditorStore(s => s.clipCrops)
   const clipZooms               = useEditorStore(s => s.clipZooms)
+  const clipZoomPresets         = useEditorStore(s => s.clipZoomPresets)
   const clipSpeeds              = useEditorStore(s => s.clipSpeeds)
   const clipColorCorrections    = useEditorStore(s => s.clipColorCorrections)
   const clipTransitionIn        = useEditorStore(s => s.clipTransitionIn)
@@ -32,6 +33,7 @@ export default function ExportPanel({ onClose }: Props) {
 
   const ccSegments     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.ccSegments ?? EMPTY_ARR)
   const shapeLayers    = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_ARR)
+  const hideLayers     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.hideLayers ?? EMPTY_ARR)
   const canBurnSubs    = ccSegments.length > 0 && subtitleStyle !== 'off'
 
   const [resolution, setResolution] = useState<720 | 1080>(1080)
@@ -59,6 +61,7 @@ export default function ExportPanel({ onClose }: Props) {
         outputFormat,
         clipCrops,
         clipZooms,
+        clipZoomPresets,
         clipSpeeds,
         clipColorCorrections,
         clipTransitionIn,
@@ -72,6 +75,7 @@ export default function ExportPanel({ onClose }: Props) {
         subtitleAppearance,
         standardSubtitleAppearance,
         shapeLayers,
+        hideLayers,
         onProgress: (ratio) => {
           setPhase('exporting')
           setProgress(ratio)
@@ -84,7 +88,7 @@ export default function ExportPanel({ onClose }: Props) {
       setError(err instanceof Error ? err.message : 'Export failed')
       setPhase('error')
     }
-  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitlePosition, subtitleFontSize, subtitleAppearance, standardSubtitleAppearance, ccSegments, shapeLayers])
+  }, [clips, sources, audioLayers, overlayLayers, outputFormat, clipCrops, clipZooms, clipSpeeds, clipColorCorrections, clipTransitionIn, clipTransitionOut, clipTransitionDurations, resolution, burnSubtitles, subtitleStyle, subtitlePosition, subtitleFontSize, subtitleAppearance, standardSubtitleAppearance, ccSegments, shapeLayers, hideLayers])
 
   const handleDownload = () => {
     if (!downloadUrl) return

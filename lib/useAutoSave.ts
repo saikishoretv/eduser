@@ -27,6 +27,7 @@ function buildMetadata(s: StoreState, projectId: string): Record<string, unknown
     steps: project.steps,
     ccSegments: project.ccSegments ?? [],
     shapeLayers: project.shapeLayers ?? [],
+    hideLayers: project.hideLayers ?? [],
     clipCrops:               pick(s.clipCrops),
     clipZooms:               pick(s.clipZooms),
     clipZoomPresets:         pick(s.clipZoomPresets),
