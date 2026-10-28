@@ -232,6 +232,12 @@ export default function Preview() {
     | null
   >(null)
 
+  const hideDragRef = useRef<
+    | { id: string; mode: 'move'; startX: number; startY: number; ox: number; oy: number }
+    | { id: string; mode: 'resize'; startX: number; startY: number; ox: number; oy: number; ow: number; oh: number; fixedX: number; fixedY: number; movingStartX: number; movingStartY: number; affectsX: boolean; affectsY: boolean }
+    | null
+  >(null)
+
   const clips       = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
   const sources     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.sources ?? EMPTY_SOURCES)
   const sourcesReady = useEditorStore(s => {
@@ -270,7 +276,10 @@ export default function Preview() {
   const executeFreezeFrame  = useEditorStore(s => s.executeFreezeFrame)
   const cancelFreezeFrame   = useEditorStore(s => s.cancelFreezeFrame)
   const shapeLayers        = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.shapeLayers ?? EMPTY_SHAPE_LAYERS)
-  const hideLayers         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.hideLayers ?? EMPTY_HIDE_LAYERS)
+  const hideLayers             = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.hideLayers ?? EMPTY_HIDE_LAYERS)
+  const selectedHideLayerId    = useEditorStore(s => s.selectedHideLayerId)
+  const setSelectedHideLayerId = useEditorStore(s => s.setSelectedHideLayerId)
+  const updateHideLayer        = useEditorStore(s => s.updateHideLayer)
   const selectedShapeId    = useEditorStore(s => s.selectedShapeId)
   const setSelectedShapeId = useEditorStore(s => s.setSelectedShapeId)
   const updateShapeLayer   = useEditorStore(s => s.updateShapeLayer)
@@ -785,6 +794,45 @@ export default function Preview() {
     }
   }, [updateShapeLayer])
 
+  // Hide layer drag + resize handlers
+  useEffect(() => {
+    const handleMove = (e: MouseEvent) => {
+      const drag = hideDragRef.current
+      if (!drag) return
+      const container = containerRef.current
+      if (!container) return
+      const rect = container.getBoundingClientRect()
+      const dxPct = (e.clientX - drag.startX) / rect.width  * 100
+      const dyPct = (e.clientY - drag.startY) / rect.height * 100
+      if (drag.mode === 'move') {
+        updateHideLayer(drag.id, {
+          x: Math.max(0, Math.min(100, drag.ox + dxPct)),
+          y: Math.max(0, Math.min(100, drag.oy + dyPct)),
+        })
+      } else {
+        let newX = drag.ox, newW = drag.ow, newY = drag.oy, newH = drag.oh
+        if (drag.affectsX) {
+          const movingX = drag.movingStartX + dxPct
+          newW = Math.max(2, Math.abs(drag.fixedX - movingX))
+          newX = (drag.fixedX + movingX) / 2 - newW / 2
+        }
+        if (drag.affectsY) {
+          const movingY = drag.movingStartY + dyPct
+          newH = Math.max(2, Math.abs(drag.fixedY - movingY))
+          newY = (drag.fixedY + movingY) / 2 - newH / 2
+        }
+        updateHideLayer(drag.id, { x: Math.max(0, newX), y: Math.max(0, newY), w: newW, h: newH })
+      }
+    }
+    const handleUp = () => { hideDragRef.current = null }
+    window.addEventListener('mousemove', handleMove)
+    window.addEventListener('mouseup', handleUp)
+    return () => {
+      window.removeEventListener('mousemove', handleMove)
+      window.removeEventListener('mouseup', handleUp)
+    }
+  }, [updateHideLayer])
+
   return (
     <div className="flex flex-col h-full bg-black">
       <div className="flex-1 flex items-center justify-center overflow-hidden min-h-0">
@@ -971,20 +1019,63 @@ export default function Preview() {
             <div className="absolute inset-0 pointer-events-none">
               {hideLayers.map(hl => {
                 if (t < hl.startAt || t >= hl.startAt + hl.duration) return null
+                const isSel = selectedHideLayerId === hl.id
                 return (
                   <div
                     key={hl.id}
-                    className="absolute"
+                    className="absolute pointer-events-auto"
                     style={{
                       left: `${hl.x}%`,
                       top: `${hl.y}%`,
                       width: `${hl.w}%`,
                       height: `${hl.h}%`,
+                      cursor: 'move',
+                      outline: isSel ? '2px solid #60a5fa' : 'none',
+                      outlineOffset: '2px',
                       ...(hl.style === 'black'
                         ? { background: '#000' }
-                        : { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)' }),
+                        : { backdropFilter: 'blur(12px)', WebkitBackdropFilter: 'blur(12px)', background: 'rgba(255,255,255,0.08)' }),
                     }}
-                  />
+                    onClick={e => { e.stopPropagation(); setSelectedHideLayerId(hl.id) }}
+                    onMouseDown={e => {
+                      e.stopPropagation()
+                      setSelectedHideLayerId(hl.id)
+                      hideDragRef.current = { id: hl.id, mode: 'move', startX: e.clientX, startY: e.clientY, ox: hl.x, oy: hl.y }
+                    }}
+                  >
+                    {isSel && RESIZE_HANDLES.map(([relX, relY, cursor]) => (
+                      <div
+                        key={`${relX}-${relY}`}
+                        className="absolute z-10"
+                        style={{
+                          width: 8, height: 8,
+                          left: `${relX * 100}%`, top: `${relY * 100}%`,
+                          transform: 'translate(-50%, -50%)',
+                          cursor,
+                          background: 'white',
+                          border: '1.5px solid #3b82f6',
+                          borderRadius: 1,
+                        }}
+                        onMouseDown={e => {
+                          e.stopPropagation()
+                          const affectsX = relX !== 0.5
+                          const affectsY = relY !== 0.5
+                          // fixedX/Y: the opposite edge (top-left based coords)
+                          // movingStartX/Y: the edge being dragged
+                          hideDragRef.current = {
+                            id: hl.id, mode: 'resize',
+                            startX: e.clientX, startY: e.clientY,
+                            ox: hl.x, oy: hl.y, ow: hl.w, oh: hl.h,
+                            fixedX: hl.x + hl.w * (1 - relX),
+                            fixedY: hl.y + hl.h * (1 - relY),
+                            movingStartX: hl.x + hl.w * relX,
+                            movingStartY: hl.y + hl.h * relY,
+                            affectsX, affectsY,
+                          }
+                        }}
+                      />
+                    ))}
+                  </div>
                 )
               })}
             </div>
