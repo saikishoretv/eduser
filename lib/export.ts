@@ -16,7 +16,7 @@ export interface ExportOptions {
   clipZooms: Record<string, number>
   clipZoomPresets: Record<string, string>
   clipSpeeds: Record<string, number>
-  resolution: 720 | 1080
+  resolution: 720 | 1080 | 1440 | 2160
   audioLayers: AudioLayer[]
   overlayLayers: OverlayLayer[]
   clipColorCorrections: Record<string, ColorCorrection>

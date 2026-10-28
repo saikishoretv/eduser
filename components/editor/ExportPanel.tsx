@@ -36,7 +36,7 @@ export default function ExportPanel({ onClose }: Props) {
   const hideLayers     = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.hideLayers ?? EMPTY_ARR)
   const canBurnSubs    = ccSegments.length > 0 && subtitleStyle !== 'off'
 
-  const [resolution, setResolution] = useState<720 | 1080>(1080)
+  const [resolution, setResolution] = useState<720 | 1080 | 1440 | 2160>(1080)
   const [burnSubtitles, setBurnSubtitles] = useState(canBurnSubs)
 
   // Keep toggle in sync if CC mode changes while panel is open
@@ -117,7 +117,7 @@ export default function ExportPanel({ onClose }: Props) {
           <div className="flex items-center justify-between">
             <span className="text-xs text-neutral-400">Resolution</span>
             <div className="flex rounded-lg overflow-hidden border border-neutral-700">
-              {([720, 1080] as const).map(r => (
+              {([720, 1080, 1440, 2160] as const).map(r => (
                 <button
                   key={r}
                   onClick={() => setResolution(r)}
@@ -128,7 +128,7 @@ export default function ExportPanel({ onClose }: Props) {
                       : 'text-neutral-400 hover:text-white hover:bg-neutral-700'
                   }`}
                 >
-                  {r}p
+                  {r === 1440 ? '2K' : r === 2160 ? '4K' : `${r}p`}
                 </button>
               ))}
             </div>
