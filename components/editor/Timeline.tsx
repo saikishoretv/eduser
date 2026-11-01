@@ -75,6 +75,9 @@ export default function Timeline({ onOpenCC, hasTranscript }: TimelineProps) {
   const [highlightsDrop, setHighlightsDrop] = useState(false)
   const [highlightsDropPos, setHighlightsDropPos] = useState({ top: 0, left: 0 })
   const highlightsBtnRef = useRef<HTMLButtonElement>(null)
+  const [addDrop, setAddDrop] = useState(false)
+  const [addDropPos, setAddDropPos] = useState({ top: 0, left: 0 })
+  const addBtnRef = useRef<HTMLButtonElement>(null)
   const [scrollLeft, setScrollLeft] = useState(0)
   const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null)
 
@@ -472,81 +475,30 @@ export default function Timeline({ onOpenCC, hasTranscript }: TimelineProps) {
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-neutral-800 shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-[11px] text-neutral-500 font-medium">Timeline</span>
-          <button
-            onClick={() => videoInputRef.current?.click()}
-            disabled={addingClip}
-            className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors disabled:opacity-40"
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            {addingClip ? 'Uploading…' : 'Add clip'}
-          </button>
-          <input
-            ref={videoInputRef}
-            type="file"
-            accept="video/*"
-            className="hidden"
-            onChange={handleVideoFileChange}
-          />
 
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors disabled:opacity-40"
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            {uploading ? 'Adding…' : 'Add audio'}
-          </button>
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="audio/*"
-            className="hidden"
-            onChange={handleAudioFileChange}
-          />
+          {/* Hidden file inputs */}
+          <input ref={videoInputRef} type="file" accept="video/*" className="hidden" onChange={handleVideoFileChange} />
+          <input ref={fileInputRef}  type="file" accept="audio/*" className="hidden" onChange={handleAudioFileChange} />
+          <input ref={imgInputRef}   type="file" accept="image/*" className="hidden" onChange={handleImageFileChange} />
 
+          {/* + Add dropdown */}
           <button
-            onClick={() => imgInputRef.current?.click()}
-            disabled={addingImg}
-            className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors disabled:opacity-40"
-          >
-            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-            </svg>
-            {addingImg ? 'Adding…' : 'Add image'}
-          </button>
-          <input ref={imgInputRef} type="file" accept="image/*" className="hidden" onChange={handleImageFileChange} />
-
-          <button
-            onClick={handleAddText}
+            ref={addBtnRef}
+            onClick={() => {
+              const rect = addBtnRef.current?.getBoundingClientRect()
+              if (rect) setAddDropPos({ top: rect.bottom + 4, left: rect.left })
+              setAddDrop(v => !v)
+            }}
             className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors"
           >
             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
             </svg>
-            Add text
+            Add
+            <svg className="w-2.5 h-2.5 opacity-50" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
-
-          <div className="relative">
-            <button
-              onClick={() => setShowBgPicker(v => !v)}
-              className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors"
-            >
-              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
-              </svg>
-              Background
-            </button>
-            {showBgPicker && (
-              <BackgroundClipPicker
-                onSelect={bg => { addBackgroundClip(bg); setShowBgPicker(false) }}
-                onClose={() => setShowBgPicker(false)}
-              />
-            )}
-          </div>
 
           {/* Highlights dropdown */}
           <div className="relative">
@@ -987,6 +939,75 @@ export default function Timeline({ onOpenCC, hasTranscript }: TimelineProps) {
       {/* Clip popover — floats above the timeline aligned to the playhead */}
       {popoverPos && selectedClipIds.length > 0 && (
         <ClipPopover anchorX={popoverPos.x} anchorY={popoverPos.y} />
+      )}
+
+      {/* Add dropdown */}
+      {addDrop && (
+        <>
+          <div className="fixed inset-0 z-[998]" onClick={() => setAddDrop(false)} />
+          <div
+            className="fixed z-[999] bg-neutral-800 border border-neutral-700 rounded-xl shadow-xl py-1 min-w-[140px]"
+            style={{ top: addDropPos.top, left: addDropPos.left }}
+          >
+            <button
+              onClick={() => { videoInputRef.current?.click(); setAddDrop(false) }}
+              disabled={addingClip}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors disabled:opacity-40"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.277A1 1 0 0121 8.68v6.64a1 1 0 01-1.447.894L15 14M4 8h8a2 2 0 012 2v4a2 2 0 01-2 2H4a2 2 0 01-2-2v-4a2 2 0 012-2z" />
+              </svg>
+              {addingClip ? 'Uploading…' : 'Clip'}
+            </button>
+            <button
+              onClick={() => { fileInputRef.current?.click(); setAddDrop(false) }}
+              disabled={uploading}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors disabled:opacity-40"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+              </svg>
+              {uploading ? 'Adding…' : 'Audio'}
+            </button>
+            <button
+              onClick={() => { imgInputRef.current?.click(); setAddDrop(false) }}
+              disabled={addingImg}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors disabled:opacity-40"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+              </svg>
+              {addingImg ? 'Adding…' : 'Image'}
+            </button>
+            <button
+              onClick={() => { handleAddText(); setAddDrop(false) }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h8m-8 6h16" />
+              </svg>
+              Text
+            </button>
+            <div className="h-px bg-neutral-700 my-1" />
+            <div className="relative">
+              <button
+                onClick={() => setShowBgPicker(v => !v)}
+                className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5z" />
+                </svg>
+                Background
+              </button>
+              {showBgPicker && (
+                <BackgroundClipPicker
+                  onSelect={bg => { addBackgroundClip(bg); setShowBgPicker(false); setAddDrop(false) }}
+                  onClose={() => setShowBgPicker(false)}
+                />
+              )}
+            </div>
+          </div>
+        </>
       )}
 
       {/* Highlights dropdown */}
