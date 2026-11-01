@@ -834,7 +834,7 @@ export default function Preview() {
   }, [updateHideLayer])
 
   return (
-    <div className="flex flex-col h-full bg-black">
+    <div className="flex flex-col h-full bg-neutral-800">
       <div className="flex-1 flex items-center justify-center overflow-hidden min-h-0">
         {clips.length > 0 ? (
           <div
@@ -846,6 +846,7 @@ export default function Preview() {
               maxWidth: '100%',
               maxHeight: '100%',
               cursor: 'grab',
+              boxShadow: '0 0 0 1px rgba(255,255,255,0.08), 0 8px 32px rgba(0,0,0,0.6)',
             }}
           >
             {/* Background color/gradient clip fill */}
