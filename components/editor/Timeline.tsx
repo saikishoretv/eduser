@@ -12,6 +12,8 @@ import ShapeItem from './ShapeItem'
 import HideLayerItem from './HideLayerItem'
 import BackgroundClipPicker from './BackgroundClipPicker'
 import ClipReorderOverlay from './ClipReorderOverlay'
+import ClipPopover from './ClipPopover'
+import RemovePausesModal from './RemovePausesModal'
 
 const MIN_DURATION = 10
 const EMPTY_CLIPS: import('@/types').Clip[] = []
@@ -50,7 +52,13 @@ function getAudioDuration(url: string): Promise<number> {
   })
 }
 
-export default function Timeline() {
+interface TimelineProps {
+  onOpenCC: () => void
+  hasTranscript: boolean
+}
+
+export default function Timeline({ onOpenCC, hasTranscript }: TimelineProps) {
+  const outerRef       = useRef<HTMLDivElement>(null)
   const scrollRef      = useRef<HTMLDivElement>(null)
   const stepsRowRef    = useRef<HTMLDivElement>(null)
   const fileInputRef   = useRef<HTMLInputElement>(null)
@@ -63,6 +71,12 @@ export default function Timeline() {
   const [addingImg, setAddingImg] = useState(false)
   const [addingClip, setAddingClip] = useState(false)
   const [showBgPicker, setShowBgPicker] = useState(false)
+  const [showRemovePauses, setShowRemovePauses] = useState(false)
+  const [highlightsDrop, setHighlightsDrop] = useState(false)
+  const [highlightsDropPos, setHighlightsDropPos] = useState({ top: 0, left: 0 })
+  const highlightsBtnRef = useRef<HTMLButtonElement>(null)
+  const [scrollLeft, setScrollLeft] = useState(0)
+  const [popoverPos, setPopoverPos] = useState<{ x: number; y: number } | null>(null)
 
   const activeProjectId = useEditorStore(s => s.activeProjectId)
   const clips         = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
@@ -102,6 +116,22 @@ export default function Timeline() {
   const reorderClips         = useEditorStore(s => s.reorderClips)
   const setZoom         = useEditorStore(s => s.setZoom)
   const clipSpeeds      = useEditorStore(s => s.clipSpeeds)
+  const addShapeLayer   = useEditorStore(s => s.addShapeLayer)
+  const addHideLayer    = useEditorStore(s => s.addHideLayer)
+
+  // Popover position: update when selection or playhead changes
+  useEffect(() => {
+    if (selectedClipIds.length === 0) { setPopoverPos(null); return }
+    const scrollEl = scrollRef.current
+    const outerEl  = outerRef.current
+    if (!scrollEl || !outerEl) return
+    const scrollRect = scrollEl.getBoundingClientRect()
+    const outerRect  = outerEl.getBoundingClientRect()
+    const rawX = scrollRect.left + playheadTime * zoom - scrollLeft
+    const x = Math.max(8, Math.min(rawX, window.innerWidth - 8))
+    const y = outerRect.top - 44
+    setPopoverPos({ x, y })
+  }, [selectedClipIds, playheadTime, zoom, scrollLeft])
 
   // Restore zoom from localStorage or auto-fit to 90% of container width (once per project)
   const zoomFitProjectRef = useRef<string | null>(null)
@@ -437,7 +467,7 @@ export default function Timeline() {
   }
 
   return (
-    <div className="relative flex flex-col bg-neutral-900 border-t border-neutral-700" style={{ height: timelineH }}>
+    <div ref={outerRef} className="relative flex flex-col bg-neutral-900 border-t border-neutral-700" style={{ height: timelineH }}>
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-neutral-800 shrink-0">
         <div className="flex items-center gap-2">
@@ -517,6 +547,46 @@ export default function Timeline() {
               />
             )}
           </div>
+
+          {/* Highlights dropdown */}
+          <div className="relative">
+            <button
+              ref={highlightsBtnRef}
+              onClick={() => {
+                const rect = highlightsBtnRef.current?.getBoundingClientRect()
+                if (rect) setHighlightsDropPos({ top: rect.bottom + 6, left: rect.left })
+                setHighlightsDrop(v => !v)
+              }}
+              className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors"
+            >
+              Highlight
+              <svg className="w-2.5 h-2.5 opacity-50" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+          </div>
+
+          <div className="w-px h-4 bg-neutral-700" />
+
+          {/* Remove Pauses */}
+          <button
+            onClick={() => setShowRemovePauses(true)}
+            className="flex items-center gap-1 px-2 py-0.5 rounded border border-neutral-700 text-[11px] text-neutral-400 hover:text-white hover:border-neutral-500 transition-colors"
+          >
+            Remove Pauses
+          </button>
+
+          {/* CC */}
+          <button
+            onClick={onOpenCC}
+            className={`flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] transition-colors ${
+              hasTranscript
+                ? 'border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-white'
+                : 'border-blue-700 text-blue-400 hover:border-blue-500 hover:text-blue-300'
+            }`}
+          >
+            {hasTranscript ? 'Edit CC' : 'Add CC'}
+          </button>
         </div>
 
         <div className="flex items-center gap-2">
@@ -575,6 +645,7 @@ export default function Timeline() {
       <div
         ref={scrollRef}
         className="flex-1 overflow-x-auto overflow-y-hidden relative cursor-crosshair select-none"
+        onScroll={e => setScrollLeft(e.currentTarget.scrollLeft)}
         onClickCapture={handleClickCapture}
         onClick={handleClick}
         onMouseMove={handleMouseMove}
@@ -759,7 +830,7 @@ export default function Timeline() {
           >
             {shapeLayers.length === 0 && (
               <div className="flex items-center h-full px-2 pointer-events-none">
-                <span className="text-[10px] text-neutral-700">No shapes · click "Add Rectangle" in the toolbar</span>
+                <span className="text-[10px] text-neutral-700">No shapes · click "Highlight" above to add one</span>
               </div>
             )}
             {shapeLayers.map(shape => (
@@ -784,7 +855,7 @@ export default function Timeline() {
           >
             {hideLayers.length === 0 && (
               <div className="flex items-center h-full px-2 pointer-events-none">
-                <span className="text-[10px] text-neutral-700">No hide regions · click "Add Hide Region" in the toolbar</span>
+                <span className="text-[10px] text-neutral-700">No hide regions · click "Highlight" above to add one</span>
               </div>
             )}
             {hideLayers.map(hl => (
@@ -912,6 +983,72 @@ export default function Timeline() {
           onClose={() => setReorderOverlay(null)}
         />
       )}
+
+      {/* Clip popover — floats above the timeline aligned to the playhead */}
+      {popoverPos && selectedClipIds.length > 0 && (
+        <ClipPopover anchorX={popoverPos.x} anchorY={popoverPos.y} />
+      )}
+
+      {/* Highlights dropdown */}
+      {highlightsDrop && (
+        <>
+          <div className="fixed inset-0 z-[998]" onClick={() => setHighlightsDrop(false)} />
+          <div
+            className="fixed z-[999] bg-neutral-800 border border-neutral-700 rounded-xl shadow-xl py-1 min-w-[140px]"
+            style={{ top: highlightsDropPos.top, left: highlightsDropPos.left }}
+          >
+            <button
+              onClick={() => {
+                addShapeLayer({ id: crypto.randomUUID(), type: 'rectangle', startAt: playheadTime, duration: 3, x: 50, y: 50, width: 30, height: 20, strokeColor: '#3b82f6', strokeWidth: 2, strokeOpacity: 1, borderRadius: 4, opacity: 1 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" /></svg>
+              Rectangle
+            </button>
+            <button
+              onClick={() => {
+                addShapeLayer({ id: crypto.randomUUID(), type: 'ripple', startAt: playheadTime, duration: 3, x: 50, y: 50, width: 25, height: 25, strokeColor: '#3b82f6', strokeWidth: 2, strokeOpacity: 1, borderRadius: 0, opacity: 1 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <circle cx="12" cy="12" r="4" /><circle cx="12" cy="12" r="8" opacity="0.5" />
+              </svg>
+              Ripple
+            </button>
+            <div className="h-px bg-neutral-700 my-1" />
+            <button
+              onClick={() => {
+                addHideLayer({ id: crypto.randomUUID(), style: 'black', startAt: playheadTime, duration: 3, x: 30, y: 30, w: 40, h: 30 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="currentColor" viewBox="0 0 24 24"><rect x="3" y="6" width="18" height="12" rx="2" /></svg>
+              Hide (Black)
+            </button>
+            <button
+              onClick={() => {
+                addHideLayer({ id: crypto.randomUUID(), style: 'blur', startAt: playheadTime, duration: 3, x: 30, y: 30, w: 40, h: 30 })
+                setHighlightsDrop(false)
+              }}
+              className="w-full flex items-center gap-2.5 px-3 py-2 text-xs text-neutral-200 hover:bg-neutral-700 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0 opacity-60" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
+                <rect x="3" y="6" width="18" height="12" rx="2" />
+                <line x1="3" y1="10" x2="21" y2="10" strokeOpacity="0.5" />
+                <line x1="3" y1="14" x2="21" y2="14" strokeOpacity="0.5" />
+              </svg>
+              Hide (Blur)
+            </button>
+          </div>
+        </>
+      )}
+
+      {showRemovePauses && <RemovePausesModal onClose={() => setShowRemovePauses(false)} />}
     </div>
   )
 }

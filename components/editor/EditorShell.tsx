@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation'
 import { useEditorStore } from '@/store/store'
 import Preview from './Preview'
 import StepsPanel from './StepsPanel'
-import Toolbar from './Toolbar'
 import Timeline from './Timeline'
 import FormatSelector from './FormatSelector'
 import ExportPanel from './ExportPanel'
@@ -137,7 +136,8 @@ export default function EditorShell({ projectId }: Props) {
         e.preventDefault()
         s.redo()
       } else if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (s.selectedHideLayerId) s.removeHideLayer(s.selectedHideLayerId)
+        if (s.selectedShapeId) s.removeShapeLayer(s.selectedShapeId)
+        else if (s.selectedHideLayerId) s.removeHideLayer(s.selectedHideLayerId)
         else if (overlayMode) s.removeOverlayLayer(s.selectedOverlayId!)
         else if (audioMode) s.removeAudioLayer(s.selectedAudioLayerId!)
         else s.deleteSelected()
@@ -281,23 +281,6 @@ export default function EditorShell({ projectId }: Props) {
 
           <FormatSelector />
 
-          {/* CC button */}
-          <div className="flex flex-col items-end">
-            <button
-              onClick={() => setShowCCModal(true)}
-              className={`px-3 py-1.5 rounded-lg border text-xs font-medium transition-colors ${
-                hasTranscript
-                  ? 'border-neutral-700 text-neutral-400 hover:border-neutral-500 hover:text-white'
-                  : 'border-blue-700 text-blue-400 hover:border-blue-500 hover:text-blue-300'
-              }`}
-            >
-              {hasTranscript ? 'Edit CC' : 'Add CC'}
-            </button>
-            {hasTranscript && translationLanguage && (
-              <span className="text-[10px] text-violet-400 mt-0.5">→ {translationLanguage}</span>
-            )}
-          </div>
-
           <button
             onClick={() => setShowExport(true)}
             className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium transition-colors"
@@ -366,12 +349,9 @@ export default function EditorShell({ projectId }: Props) {
         </div>
       </div>
 
-      {/* Toolbar */}
-      <Toolbar />
-
       {/* Timeline */}
       <div className="shrink-0">
-        <Timeline />
+        <Timeline onOpenCC={() => setShowCCModal(true)} hasTranscript={hasTranscript} />
       </div>
 
       {showExport  && <ExportPanel onClose={() => setShowExport(false)} />}
