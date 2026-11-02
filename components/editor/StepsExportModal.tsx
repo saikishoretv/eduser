@@ -10,6 +10,9 @@ const EMPTY_CLIPS: import('@/types').Clip[] = []
 const EMPTY_SOURCES: SourceVideo[] = []
 
 interface FrameCapture { dataUrl: string; landscape: boolean }
+interface Rect { x: number; y: number; w: number; h: number; color: string }
+
+const MARKER_COLORS = ['#ef4444', '#f97316', '#eab308', '#22c55e', '#3b82f6', '#a855f7', '#ffffff']
 
 interface Props { onClose: () => void }
 
@@ -54,6 +57,9 @@ export default function StepsExportModal({ onClose }: Props) {
   const [scrubMin, setScrubMin]               = useState(0)
   const [scrubMax, setScrubMax]               = useState(1)
   const [frameConfirmed, setFrameConfirmed]   = useState(false)
+  const [annotations, setAnnotations]         = useState<Record<string, Rect[]>>({})
+  const [markerColor, setMarkerColor]         = useState(MARKER_COLORS[0])
+  const [drawing, setDrawing]                 = useState<{ sx: number; sy: number; ex: number; ey: number } | null>(null)
 
   // ── Header tab ──
   const [headerTitle, setHeaderTitle]       = useState(projectName || 'Steps')
@@ -179,13 +185,58 @@ export default function StepsExportModal({ onClose }: Props) {
     video.currentTime = time
   }
 
+  // SVG drawing handlers
+  function svgPos(e: React.MouseEvent<SVGSVGElement>) {
+    const r = e.currentTarget.getBoundingClientRect()
+    return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height }
+  }
+  function svgMouseDown(e: React.MouseEvent<SVGSVGElement>) {
+    const { x, y } = svgPos(e)
+    setDrawing({ sx: x, sy: y, ex: x, ey: y })
+  }
+  function svgMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!drawing) return
+    const { x, y } = svgPos(e)
+    setDrawing(prev => prev ? { ...prev, ex: x, ey: y } : null)
+  }
+  function svgMouseUp(e: React.MouseEvent<SVGSVGElement>) {
+    if (!drawing) return
+    const { x, y } = svgPos(e)
+    const rx = Math.min(drawing.sx, x), ry = Math.min(drawing.sy, y)
+    const rw = Math.abs(x - drawing.sx),  rh = Math.abs(y - drawing.sy)
+    if (rw > 0.01 && rh > 0.01) {
+      const id = steps[activeIdx].id
+      setAnnotations(prev => ({ ...prev, [id]: [...(prev[id] ?? []), { x: rx, y: ry, w: rw, h: rh, color: markerColor }] }))
+    }
+    setDrawing(null)
+  }
+
   function useThisFrame() {
+    const video = videoRef.current
     const canvas = canvasRef.current
-    if (!canvas) return
-    const landscape = canvas.width >= canvas.height
+    if (!video || !canvas) return
+
+    // Composite video frame + annotations onto offscreen canvas
+    const off = document.createElement('canvas')
+    off.width  = canvas.width
+    off.height = canvas.height
+    const ctx = off.getContext('2d')
+    if (!ctx) return
+    ctx.drawImage(video, 0, 0, off.width, off.height)
+
+    const rects = annotations[steps[activeIdx].id] ?? []
+    if (rects.length > 0) {
+      ctx.lineWidth = Math.max(2, off.width / 250)
+      rects.forEach(r => {
+        ctx.strokeStyle = r.color
+        ctx.strokeRect(r.x * off.width, r.y * off.height, r.w * off.width, r.h * off.height)
+      })
+    }
+
+    const landscape = off.width >= off.height
     setStepFrames(prev => ({
       ...prev,
-      [steps[activeIdx].id]: { dataUrl: canvas.toDataURL('image/jpeg', 0.85), landscape },
+      [steps[activeIdx].id]: { dataUrl: off.toDataURL('image/jpeg', 0.85), landscape },
     }))
     setFrameConfirmed(true)
     setTimeout(() => setFrameConfirmed(false), 1800)
@@ -401,14 +452,46 @@ export default function StepsExportModal({ onClose }: Props) {
                       <p className="text-[10px] font-semibold uppercase tracking-wider text-neutral-500 shrink-0">
                         Step {activeIdx + 1} — {activeStep.title || 'Untitled'}
                       </p>
+                      {/* Canvas + SVG marker overlay */}
                       <div className="flex-1 min-h-0 flex items-center justify-center bg-neutral-950 rounded-xl overflow-hidden border border-neutral-800">
-                        {hasVideoCtx
-                          ? <canvas ref={canvasRef} className="max-w-full max-h-full" />
-                          : <p className="text-xs text-neutral-600">No video source for this step</p>
-                        }
+                        {hasVideoCtx ? (
+                          <div className="relative inline-block">
+                            <canvas ref={canvasRef} className="max-w-full max-h-full block" />
+                            <svg
+                              className="absolute inset-0 w-full h-full cursor-crosshair select-none"
+                              onMouseDown={svgMouseDown}
+                              onMouseMove={svgMouseMove}
+                              onMouseUp={svgMouseUp}
+                              onMouseLeave={() => setDrawing(null)}
+                            >
+                              {(annotations[activeStep?.id ?? ''] ?? []).map((r, i) => (
+                                <rect key={i}
+                                  x={`${r.x * 100}%`} y={`${r.y * 100}%`}
+                                  width={`${r.w * 100}%`} height={`${r.h * 100}%`}
+                                  fill="none" stroke={r.color} strokeWidth="2"
+                                  vectorEffect="non-scaling-stroke"
+                                />
+                              ))}
+                              {drawing && (
+                                <rect
+                                  x={`${Math.min(drawing.sx, drawing.ex) * 100}%`}
+                                  y={`${Math.min(drawing.sy, drawing.ey) * 100}%`}
+                                  width={`${Math.abs(drawing.ex - drawing.sx) * 100}%`}
+                                  height={`${Math.abs(drawing.ey - drawing.sy) * 100}%`}
+                                  fill="none" stroke={markerColor} strokeWidth="2"
+                                  strokeDasharray="4 2" vectorEffect="non-scaling-stroke"
+                                />
+                              )}
+                            </svg>
+                          </div>
+                        ) : (
+                          <p className="text-xs text-neutral-600">No video source for this step</p>
+                        )}
                       </div>
+
                       {hasVideoCtx && (
                         <div className="shrink-0 flex flex-col gap-2">
+                          {/* Scrubber */}
                           <input
                             type="range"
                             min={scrubMin} max={scrubMax} step={1 / 30} value={scrubTime}
@@ -425,6 +508,38 @@ export default function StepsExportModal({ onClose }: Props) {
                             >
                               {frameConfirmed ? '✓ Frame set' : 'Use this frame'}
                             </button>
+                          </div>
+
+                          {/* Marker controls */}
+                          <div className="flex items-center gap-2 pt-1 border-t border-neutral-800">
+                            <span className="text-[10px] text-neutral-600 shrink-0">Markers</span>
+                            <div className="flex items-center gap-1.5">
+                              {MARKER_COLORS.map(c => (
+                                <button
+                                  key={c}
+                                  onClick={() => setMarkerColor(c)}
+                                  style={{ background: c }}
+                                  className={`w-4 h-4 rounded-full transition-all ${
+                                    markerColor === c ? 'ring-2 ring-white ring-offset-1 ring-offset-neutral-900 scale-110' : ''
+                                  }`}
+                                />
+                              ))}
+                              <input
+                                type="color"
+                                value={markerColor}
+                                onChange={e => setMarkerColor(e.target.value)}
+                                title="Custom color"
+                                className="w-4 h-4 rounded cursor-pointer bg-transparent border border-neutral-600"
+                              />
+                            </div>
+                            {(annotations[activeStep?.id ?? ''] ?? []).length > 0 && (
+                              <button
+                                onClick={() => setAnnotations(prev => ({ ...prev, [activeStep!.id]: [] }))}
+                                className="ml-auto text-[10px] text-neutral-600 hover:text-red-400 transition-colors"
+                              >
+                                Clear
+                              </button>
+                            )}
                           </div>
                         </div>
                       )}
