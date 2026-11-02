@@ -5,6 +5,7 @@ import { useEditorStore } from '@/store/store'
 import { getClipTimings } from '@/lib/clipUtils'
 import { generateSpeech, warmUpTTS, TTS_VOICES, TtsVoice } from '@/lib/tts'
 import { Step, AudioLayer } from '@/types'
+import StepsExportModal from './StepsExportModal'
 
 type AiAction = 'fix' | 'improve' | 'readable' | 'custom'
 
@@ -39,7 +40,7 @@ function GripIcon() {
 export default function StepsPanel({ projectId }: { projectId: string }) {
   const steps        = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.steps ?? EMPTY_STEPS)
   const clips        = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.clips ?? EMPTY_CLIPS)
-  const clipSpeeds   = useEditorStore(s => s.clipSpeeds)
+const clipSpeeds   = useEditorStore(s => s.clipSpeeds)
   const playhead     = useEditorStore(s => s.playheadTime)
   const setPlayhead  = useEditorStore(s => s.setPlayhead)
   const updateStep   = useEditorStore(s => s.updateStep)
@@ -49,6 +50,7 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
   const addAudioLayer = useEditorStore(s => s.addAudioLayer)
   const audioLayers   = useEditorStore(s => s.projects.find(p => p.id === s.activeProjectId)?.audioLayers ?? EMPTY_AUDIO_LAYERS)
 
+  const [showExportModal, setShowExportModal] = useState(false)
   const [dragIdx,     setDragIdx]     = useState<number | null>(null)
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null)
   const [generatingId, setGeneratingId] = useState<string | null>(null)
@@ -133,38 +135,9 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
     setMoreMenuOpen(false)
   }
 
-  function buildStepsHtml(title: string): string {
-    const body = steps.map((s, i) => `
-      <div style="margin-bottom:24px;page-break-inside:avoid">
-        <p style="margin:0 0 4px;font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:#666">Step ${i + 1}</p>
-        <p style="margin:0 0 6px;font-size:16px;font-weight:600">${s.title || '(Untitled)'}</p>
-        ${s.description ? `<p style="margin:0;font-size:14px;line-height:1.6;color:#333">${s.description.replace(/\n/g, '<br>')}</p>` : ''}
-      </div>`).join('')
-    return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>
-      <style>body{font-family:sans-serif;max-width:720px;margin:40px auto;color:#111}h1{font-size:20px;margin:0 0 28px}hr{border:none;border-top:1px solid #e5e5e5;margin:28px 0}@media print{body{margin:24px}}</style>
-      </head><body><h1>${title}</h1><hr>${body}</body></html>`
-  }
-
-  function downloadAsPdf() {
-    const html = buildStepsHtml(projectName || 'Steps')
-    const win = window.open('', '_blank')
-    if (!win) return
-    win.document.write(html)
-    win.document.close()
-    win.onload = () => { win.print() }
+  function openExport() {
     setMoreMenuOpen(false)
-  }
-
-  function downloadAsDoc() {
-    const html = buildStepsHtml(projectName || 'Steps')
-    const blob = new Blob([html], { type: 'application/msword' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${(projectName || 'steps').replace(/\s+/g, '-').toLowerCase()}-steps.doc`
-    a.click()
-    URL.revokeObjectURL(url)
-    setMoreMenuOpen(false)
+    setShowExportModal(true)
   }
 
   // AI script state
@@ -455,18 +428,11 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
                   Copy with voiceover
                 </button>
                 <div className="h-px bg-neutral-800 mx-2 my-0.5" />
-                <p className="px-3 pt-1.5 pb-0.5 text-[9px] font-semibold uppercase tracking-wider text-neutral-600">Download</p>
-                <button onClick={downloadAsPdf} className="w-full text-left px-3 py-2 text-[11px] text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors flex items-center gap-2">
+                <button onClick={openExport} className="w-full text-left px-3 py-2 text-[11px] text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors flex items-center gap-2">
                   <svg className="w-3 h-3 shrink-0 text-neutral-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
                   </svg>
-                  PDF
-                </button>
-                <button onClick={downloadAsDoc} className="w-full text-left px-3 py-2 text-[11px] text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors flex items-center gap-2">
-                  <svg className="w-3 h-3 shrink-0 text-neutral-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 10v6m0 0l-3-3m3 3l3-3M3 17V7a2 2 0 012-2h6l2 2h6a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
-                  </svg>
-                  Word Doc
+                  Export…
                 </button>
                 <div className="h-px bg-neutral-800 mx-2 my-0.5" />
                 <button onClick={resetSteps} className="w-full text-left px-3 py-2 text-[11px] text-red-400 hover:bg-neutral-800 hover:text-red-300 transition-colors">
@@ -695,6 +661,8 @@ export default function StepsPanel({ projectId }: { projectId: string }) {
           )
         })}
       </div>
+
+      {showExportModal && <StepsExportModal onClose={() => setShowExportModal(false)} />}
     </div>
   )
 }
